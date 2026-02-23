@@ -1,0 +1,43 @@
+{
+    "name": "mikro-api/mikro-api",
+    "description": "Minimalist PHP framework inspired by NestJS with attribute-based routing, validation, and migrations",
+    "type": "library",
+    "keywords": ["framework", "api", "rest", "php8", "attributes", "nestjs", "minimal", "jwt", "validation", "migrations"],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "MikroAPI Contributors",
+            "email": "info@mikro-api.dev"
+        }
+    ],
+    "require": {
+        "php": ">=8.0",
+        "ext-pdo": "*",
+        "ext-json": "*"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "MikroApi\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "MikroApi\\Tests\\": "tests/"
+        }
+    },
+    "bin": [
+        "bin/mikro-migrate"
+    ],
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "scripts": {
+        "test": "phpunit",
+        "migrate": "mikro-migrate migrate",
+        "migrate:rollback": "mikro-migrate rollback",
+        "migrate:status": "mikro-migrate status",
+        "migrate:reset": "mikro-migrate reset"
+    }
+}

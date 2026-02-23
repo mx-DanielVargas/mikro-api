@@ -1,0 +1,147 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * MikroAPI Migration CLI
+ *
+ * Usage:
+ *   vendor/bin/mikro-migrate migrate         → Run pending migrations
+ *   vendor/bin/mikro-migrate rollback        → Rollback last migration
+ *   vendor/bin/mikro-migrate reset           → Rollback all migrations
+ *   vendor/bin/mikro-migrate status          → Show migration status
+ *   vendor/bin/mikro-migrate make <name>     → Create new migration file
+ */
+
+declare(strict_types=1);
+
+// Try to find autoload from different possible locations
+$autoloadPaths = [
+    __DIR__ . '/../../../autoload.php',  // Installed as dependency
+    __DIR__ . '/../vendor/autoload.php', // Development
+];
+
+$autoloadFound = false;
+foreach ($autoloadPaths as $autoloadPath) {
+    if (file_exists($autoloadPath)) {
+        require_once $autoloadPath;
+        $autoloadFound = true;
+        break;
+    }
+}
+
+if (!$autoloadFound) {
+    echo "Error: Could not find autoload.php\n";
+    echo "Make sure you run 'composer install' first.\n";
+    exit(1);
+}
+
+use MikroApi\Database\Database;
+use MikroApi\Database\MigrationRunner;
+
+$command = $argv[1] ?? 'help';
+
+// Determine project root (where composer.json is)
+$projectRoot = getcwd();
+
+// ── Command: make (doesn't need database) ────────────────────────────────────
+if ($command === 'make') {
+    $name = $argv[2] ?? null;
+    if (!$name) {
+        echo "Usage: vendor/bin/mikro-migrate make <name>\n";
+        echo "Example: vendor/bin/mikro-migrate make create_products_table\n";
+        exit(1);
+    }
+
+    $dir = $projectRoot . '/database/migrations';
+    if (!is_dir($dir)) {
+        mkdir($dir, 0755, true);
+    }
+
+    $timestamp = date('Y_m_d_His');
+    $filename  = "{$timestamp}_{$name}.php";
+    $className = str_replace('_', '', ucwords($name, '_'));
+
+    $stub = <<<PHP
+<?php
+
+namespace Database\Migrations;
+
+use MikroApi\Database\Migration;
+use MikroApi\Attributes\Schema\Table;
+use MikroApi\Attributes\Schema\Column;
+use MikroApi\Attributes\Schema\PrimaryKey;
+use MikroApi\Attributes\Schema\Unique;
+use MikroApi\Attributes\Schema\Index;
+use MikroApi\Attributes\Schema\ForeignKey;
+use MikroApi\Attributes\Schema\Timestamps;
+use MikroApi\Attributes\Schema\SoftDeletes;
+
+#[Table('{$name}')]
+#[Timestamps]
+class {$className} extends Migration
+{
+    #[PrimaryKey]
+    #[Column(type: 'int')]
+    public \$id;
+
+    // Define your columns here with attributes
+}
+PHP;
+
+    file_put_contents("{$dir}/{$filename}", $stub);
+    echo "✓ Migration created: database/migrations/{$filename}\n";
+    exit(0);
+}
+
+// ── Other commands: need database ─────────────────────────────────────────────
+$configPath = $projectRoot . '/config/database.php';
+
+if (!file_exists($configPath)) {
+    echo "Error: Database configuration not found at {$configPath}\n";
+    echo "Please create config/database.php with your database settings.\n";
+    exit(1);
+}
+
+$config = require $configPath;
+
+try {
+    $db = Database::connect($config);
+    $runner = new MigrationRunner(
+        db: $db,
+        migrationsPath: $projectRoot . '/database/migrations',
+        migrationsNamespace: 'Database\\Migrations',
+    );
+
+    match ($command) {
+        'migrate'  => $runner->migrate(),
+        'rollback' => $runner->rollback(),
+        'reset'    => $runner->reset(),
+        'status'   => $runner->status(),
+        default    => showHelp(),
+    };
+} catch (\Throwable $e) {
+    echo "Error: " . $e->getMessage() . "\n";
+    exit(1);
+}
+
+function showHelp(): void
+{
+    echo <<<HELP
+MikroAPI Migration CLI
+
+Usage: vendor/bin/mikro-migrate <command>
+
+Available commands:
+  migrate           Run all pending migrations
+  rollback          Rollback the last migration
+  reset             Rollback all migrations
+  status            Show status of all migrations
+  make <name>       Create a new migration file
+
+Examples:
+  vendor/bin/mikro-migrate make create_users_table
+  vendor/bin/mikro-migrate migrate
+  vendor/bin/mikro-migrate status
+
+HELP;
+}

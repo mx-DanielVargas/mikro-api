@@ -1,0 +1,11 @@
+<?php
+// core/Attributes/Controller.php
+namespace MikroApi\Attributes;
+
+#[\Attribute(\Attribute::TARGET_CLASS)]
+class Controller
+{
+    public function __construct(
+        public string $prefix = '',
+    ) {}
+}
