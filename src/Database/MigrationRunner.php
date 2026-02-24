@@ -38,10 +38,12 @@ class MigrationRunner
 
         foreach ($pending as $file => $class) {
             $this->log("Migrando: {$file}");
-            $migration = new $class($this->db->getDriver());
+            $migration = new $class($this->db->getDriver(), $this->db->getPdo());
             $sql       = $migration->up();
 
-            $this->db->execute($sql);
+            if ($sql && \trim($sql) !== '' && \trim($sql) !== '-- No hay cambios que aplicar') {
+                $this->db->execute($sql);
+            }
             $this->markAsMigrated($file);
             $this->log("  ✓ {$file}");
         }
@@ -66,7 +68,7 @@ class MigrationRunner
         }
 
         $this->log("Revirtiendo: {$last}");
-        $migration = new $class($this->db->getDriver());
+        $migration = new $class($this->db->getDriver(), $this->db->getPdo());
         $sql       = $migration->down();
 
         $this->db->execute($sql);
@@ -91,7 +93,7 @@ class MigrationRunner
             }
 
             $this->log("Revirtiendo: {$file}");
-            $migration = new $class($this->db->getDriver());
+            $migration = new $class($this->db->getDriver(), $this->db->getPdo());
             $this->db->execute($migration->down());
             $this->markAsRolledBack($file);
             $this->log("  ✓ {$file}");
