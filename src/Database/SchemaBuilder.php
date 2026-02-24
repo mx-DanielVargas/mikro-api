@@ -29,6 +29,157 @@ class SchemaBuilder
     /*  API pública                                                         */
     /* ------------------------------------------------------------------ */
 
+    public function buildAlterTable(string $migrationClass, \PDO $pdo): string
+    {
+        $ref = new \ReflectionClass($migrationClass);
+
+        $tableAttrs = $ref->getAttributes(Table::class);
+        if (empty($tableAttrs)) {
+            throw new \RuntimeException("La clase {$migrationClass} no tiene el atributo #[Table]");
+        }
+
+        /** @var Table $table */
+        $table          = $tableAttrs[0]->newInstance();
+        $tableName      = $table->name;
+        $hasTimestamps  = !empty($ref->getAttributes(Timestamps::class));
+        $hasSoftDeletes = !empty($ref->getAttributes(SoftDeletes::class));
+
+        // Obtener columnas existentes en la tabla
+        $existingColumns = $this->getExistingColumns($pdo, $tableName);
+
+        $alterStatements = [];
+        $postStatements  = [];
+
+        foreach ($ref->getProperties() as $prop) {
+            $colAttrs = $prop->getAttributes(Column::class);
+            if (empty($colAttrs)) continue;
+
+            /** @var Column $col */
+            $col     = $colAttrs[0]->newInstance();
+            $colName = $col->name ?? $this->toSnakeCase($prop->getName());
+
+            // Si la columna ya existe, saltarla
+            if (\in_array($colName, $existingColumns)) {
+                continue;
+            }
+
+            $pkAttrs = $prop->getAttributes(PrimaryKey::class);
+            $isPk    = !empty($pkAttrs);
+            $pk      = $isPk ? $pkAttrs[0]->newInstance() : null;
+
+            // Para ALTER TABLE en SQLite, las columnas NOT NULL deben tener un valor por defecto
+            // o ser nullable si la tabla ya tiene datos
+            $columnDef = $this->buildColumnDef($colName, $col, $pk);
+            
+            // Si es SQLite y la columna es NOT NULL sin default, hacerla nullable para ALTER TABLE
+            if ($this->driver === 'sqlite' && !$col->nullable && $col->default === '__NONE__' && !$isPk) {
+                // Crear una copia modificada de la columna para hacerla nullable
+                $modifiedCol = clone $col;
+                $modifiedCol->nullable = true;
+                $columnDef = $this->buildColumnDef($colName, $modifiedCol, $pk);
+            }
+
+            if ($this->driver === 'mysql') {
+                $alterStatements[] = "ADD COLUMN {$columnDef}";
+            } else {
+                // SQLite
+                $alterStatements[] = "ADD COLUMN {$columnDef}";
+            }
+
+            // Unique
+            foreach ($prop->getAttributes(Unique::class) as $uAttr) {
+                /** @var Unique $u */
+                $u       = $uAttr->newInstance();
+                $idxName = $u->name ?? "uniq_{$tableName}_{$colName}";
+                if ($this->driver === 'mysql') {
+                    $alterStatements[] = "ADD UNIQUE KEY `{$idxName}` (`{$colName}`)";
+                } else {
+                    $postStatements[] = "CREATE UNIQUE INDEX IF NOT EXISTS `{$idxName}` ON `{$tableName}` (`{$colName}`);";
+                }
+            }
+
+            // Index
+            foreach ($prop->getAttributes(Index::class) as $iAttr) {
+                /** @var Index $i */
+                $i       = $iAttr->newInstance();
+                $idxName = $i->name ?? "idx_{$tableName}_{$colName}";
+                if ($this->driver === 'mysql') {
+                    $alterStatements[] = "ADD KEY `{$idxName}` (`{$colName}`)";
+                } else {
+                    $postStatements[] = "CREATE INDEX IF NOT EXISTS `{$idxName}` ON `{$tableName}` (`{$colName}`);";
+                }
+            }
+
+            // ForeignKey
+            foreach ($prop->getAttributes(ForeignKey::class) as $fkAttr) {
+                /** @var ForeignKey $fk */
+                $fk     = $fkAttr->newInstance();
+                $fkName = $fk->name ?? "fk_{$tableName}_{$colName}";
+                if ($this->driver === 'mysql') {
+                    $alterStatements[] = "ADD CONSTRAINT `{$fkName}` FOREIGN KEY (`{$colName}`) "
+                        . "REFERENCES `{$fk->references}` (`{$fk->on}`) "
+                        . "ON DELETE {$fk->onDelete} ON UPDATE {$fk->onUpdate}";
+                } else {
+                    // SQLite no soporta agregar FK después de crear la tabla
+                    // Se requeriría recrear la tabla completa
+                }
+            }
+        }
+
+        // Timestamps
+        if ($hasTimestamps) {
+            if (!\in_array('created_at', $existingColumns)) {
+                if ($this->driver === 'mysql') {
+                    $alterStatements[] = "ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP";
+                } else {
+                    $alterStatements[] = "ADD COLUMN `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP";
+                }
+            }
+            if (!\in_array('updated_at', $existingColumns)) {
+                if ($this->driver === 'mysql') {
+                    $alterStatements[] = "ADD COLUMN `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP";
+                } else {
+                    $alterStatements[] = "ADD COLUMN `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP";
+                }
+            }
+        }
+
+        // SoftDeletes
+        if ($hasSoftDeletes && !\in_array('deleted_at', $existingColumns)) {
+            $colDef = "`deleted_at` " . ($this->driver === 'mysql' ? 'TIMESTAMP' : 'DATETIME') . " NULL DEFAULT NULL";
+            $alterStatements[] = "ADD COLUMN {$colDef}";
+            
+            $idxName = "idx_{$tableName}_deleted_at";
+            if ($this->driver === 'mysql') {
+                $alterStatements[] = "ADD KEY `{$idxName}` (`deleted_at`)";
+            } else {
+                $postStatements[] = "CREATE INDEX IF NOT EXISTS `{$idxName}` ON `{$tableName}` (`deleted_at`);";
+            }
+        }
+
+        if (empty($alterStatements)) {
+            return ''; // No hay nada que alterar
+        }
+
+        $sql = '';
+        
+        if ($this->driver === 'mysql') {
+            // MySQL soporta múltiples ADD COLUMN en una sola sentencia
+            $sql = "ALTER TABLE `{$tableName}`\n  " . \implode(",\n  ", $alterStatements) . ";";
+        } else {
+            // SQLite requiere una sentencia ALTER TABLE por cada ADD COLUMN
+            foreach ($alterStatements as $statement) {
+                $sql .= "ALTER TABLE `{$tableName}` {$statement};\n";
+            }
+        }
+        
+        if (!empty($postStatements)) {
+            $sql .= "\n" . \implode("\n", $postStatements);
+        }
+
+        return $sql;
+    }
+
     public function buildCreateTable(string $migrationClass): string
     {
         $ref = new \ReflectionClass($migrationClass);
@@ -239,5 +390,26 @@ class SchemaBuilder
     private function toSnakeCase(string $name): string
     {
         return \strtolower(\preg_replace('/[A-Z]/', '_$0', \lcfirst($name)));
+    }
+
+    private function getExistingColumns(\PDO $pdo, string $tableName): array
+    {
+        try {
+            if ($this->driver === 'mysql') {
+                $stmt = $pdo->prepare("SHOW COLUMNS FROM `{$tableName}`");
+                $stmt->execute();
+                $columns = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+                return \array_column($columns, 'Field');
+            } else {
+                // SQLite
+                $stmt = $pdo->prepare("PRAGMA table_info(`{$tableName}`)");
+                $stmt->execute();
+                $columns = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+                return \array_column($columns, 'name');
+            }
+        } catch (\PDOException $e) {
+            // La tabla no existe
+            return [];
+        }
     }
 }
