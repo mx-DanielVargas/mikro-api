@@ -323,8 +323,11 @@ class SchemaBuilder
 
         if ($pk !== null) {
             if ($this->driver === 'sqlite') {
-                // SQLite: INTEGER PRIMARY KEY es alias de rowid (autoincrement implícito)
-                $def = "`{$colName}` INTEGER PRIMARY KEY" . ($pk->autoIncrement ? ' AUTOINCREMENT' : '');
+                if (in_array($col->type, ['int', 'bigint', 'integer'])) {
+                    $def = "`{$colName}` INTEGER PRIMARY KEY" . ($pk->autoIncrement ? ' AUTOINCREMENT' : '');
+                } else {
+                    $def = "`{$colName}` {$type} PRIMARY KEY NOT NULL";
+                }
             } else {
                 $def .= $pk->autoIncrement ? ' NOT NULL AUTO_INCREMENT' : ' NOT NULL';
             }

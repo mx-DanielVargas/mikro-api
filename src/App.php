@@ -20,6 +20,12 @@ class App
         $this->router = new Router();
     }
 
+    public function useViews(string $viewsPath, string $extension = '.php'): self
+    {
+        Response::setViewEngine(new View\Engine($viewsPath, $extension));
+        return $this;
+    }
+
     /* ------------------------------------------------------------------ */
     /*  Registro de controladores                                           */
     /* ------------------------------------------------------------------ */

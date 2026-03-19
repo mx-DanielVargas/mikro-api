@@ -62,7 +62,7 @@ class Router
                 $dtoClass = $bodyAttr->dtoClass;
             }
 
-            $fullPath = $prefix . '/' . ltrim($routeAttr->path, '/');
+            $fullPath = rtrim($prefix, '/') . '/' . ltrim($routeAttr->path, '/');
             $fullPath = rtrim($fullPath, '/') ?: '/';
 
             [$regex, $paramNames] = $this->buildRegex($fullPath);
