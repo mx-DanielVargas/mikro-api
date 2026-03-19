@@ -18,7 +18,7 @@ class Response
     {
         $res         = new self();
         $res->status = $status;
-        $res->body   = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+        $res->body   = json_encode($data, JSON_UNESCAPED_UNICODE);
         $res->headers['Content-Type'] = 'application/json; charset=utf-8';
         return $res;
     }
@@ -46,20 +46,47 @@ class Response
         return self::json(['error' => $message], $status);
     }
 
+    public static function empty(int $status = 204): self
+    {
+        $res         = new self();
+        $res->status = $status;
+        return $res;
+    }
+
+    public static function redirect(string $url, int $status = 302): self
+    {
+        $res = new self();
+        $res->status  = $status;
+        $res->headers['Location'] = $url;
+        return $res;
+    }
+
     /* ------------------------------------------------------------------ */
     /*  Fluent modifiers                                                    */
     /* ------------------------------------------------------------------ */
 
     public function withHeader(string $name, string $value): self
     {
-        $this->headers[$name] = $value;
-        return $this;
+        $clone = clone $this;
+        $clone->headers[$name] = $value;
+        return $clone;
     }
 
     public function withStatus(int $status): self
     {
-        $this->status = $status;
-        return $this;
+        $clone = clone $this;
+        $clone->status = $status;
+        return $clone;
+    }
+
+    public function getStatus(): int
+    {
+        return $this->status;
+    }
+
+    public function getBody(): string
+    {
+        return $this->body;
     }
 
     /* ------------------------------------------------------------------ */

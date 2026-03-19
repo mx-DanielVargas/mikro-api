@@ -2,32 +2,52 @@
 
 namespace MikroApi;
 
+use MikroApi\Middleware\MiddlewareInterface;
 use MikroApi\Swagger\SwaggerGenerator;
 use MikroApi\Swagger\SwaggerUI;
 
 class App
 {
     private Router $router;
+    private Container $container;
 
     /** Controladores registrados via useController() */
     private array $controllers = [];
 
+    /** @var MiddlewareInterface[] */
+    private array $middlewares = [];
+
     /** SwaggerUI listo para despachar, o null si no está habilitado */
     private ?SwaggerUI $swaggerUI = null;
 
-    public function __construct()
+    public function __construct(?Container $container = null)
     {
-        $this->router = new Router();
+        $this->container = $container ?? new Container();
+        $this->router    = new Router();
+        $this->router->setContainer($this->container);
+    }
+
+    public function getContainer(): Container
+    {
+        return $this->container;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Middleware                                                           */
+    /* ------------------------------------------------------------------ */
+
+    public function useMiddleware(MiddlewareInterface ...$middlewares): self
+    {
+        foreach ($middlewares as $mw) {
+            $this->middlewares[] = $mw;
+        }
+        return $this;
     }
 
     /* ------------------------------------------------------------------ */
     /*  Registro de controladores                                           */
     /* ------------------------------------------------------------------ */
 
-    /**
-     * Registra uno o varios controladores.
-     * Retorna $this para encadenamiento fluido.
-     */
     public function useController(string ...$controllers): self
     {
         foreach ($controllers as $controller) {
@@ -41,19 +61,6 @@ class App
     /*  Swagger                                                             */
     /* ------------------------------------------------------------------ */
 
-    /**
-     * Habilita la generación automática de documentación Swagger UI.
-     *
-     * Toma por defecto los controladores registrados con useController().
-     * Usa $excludeControllers para ignorar controladores específicos.
-     *
-     * @param array       $config              Metadatos del spec (title, version, description, servers)
-     * @param string[]    $excludeControllers  Clases de controladores a excluir del spec
-     * @param string[]    $controllers         Controladores a documentar (default: todos los registrados)
-     * @param string      $path                Ruta de la UI  (default: /docs)
-     * @param string      $jsonPath            Ruta del JSON  (default: /docs/json)
-     * @param string[]    $authGuards          Guards que implican autenticación Bearer
-     */
     public function enableSwagger(
         array   $config             = [],
         array   $excludeControllers = [],
@@ -62,7 +69,6 @@ class App
         string  $jsonPath           = '/docs/json',
         array   $authGuards         = [],
     ): self {
-        // Si no se pasan controladores explícitos, usar los registrados
         $toDocument = empty($controllers) ? $this->controllers : $controllers;
 
         $generator = new SwaggerGenerator();
@@ -92,31 +98,35 @@ class App
 
     public function run(): void
     {
-        // Manejar preflight CORS (descomenta si necesitas)
-        // if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-        //     header('Access-Control-Allow-Origin: *');
-        //     header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS');
-        //     header('Access-Control-Allow-Headers: Content-Type, Authorization');
-        //     http_response_code(204);
-        //     exit;
-        // }
-
         try {
             $request = Request::capture();
 
-            // Interceptar rutas de documentación antes del router normal
+            // Interceptar rutas de documentación antes del pipeline
             if ($this->swaggerUI !== null && $this->swaggerUI->matches($request->path)) {
-                $this->swaggerUI->handle($request->path);
-                return; // handle() llama exit internamente
+                $this->swaggerUI->handle($request->path)->send();
+                return;
             }
 
-            $response = $this->router->dispatch($request);
+            // Construir pipeline: middlewares → router dispatch
+            $core = fn(Request $req): Response => $this->router->dispatch($req);
+
+            $pipeline = array_reduce(
+                array_reverse($this->middlewares),
+                fn(callable $next, MiddlewareInterface $mw) =>
+                    fn(Request $req): Response => $mw->handle($req, $next),
+                $core,
+            );
+
+            $response = $pipeline($request);
             $response->send();
 
-        } catch (\Core\Service\ServiceException $e) {
+        } catch (\MikroApi\Service\ServiceException $e) {
             Response::error($e->getMessage(), $e->getStatusCode())->send();
         } catch (\Throwable $e) {
-            Response::error($e->getMessage(), 500)->send();
+            $message = ($_SERVER['APP_ENV'] ?? '') === 'production'
+                ? 'Internal Server Error'
+                : $e->getMessage();
+            Response::error($message, 500)->send();
         }
     }
 }

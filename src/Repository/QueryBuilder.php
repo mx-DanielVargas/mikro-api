@@ -57,6 +57,12 @@ class QueryBuilder
 
     public function select(string ...$columns): static
     {
+        foreach ($columns as $col) {
+            // Skip validation for raw expressions (e.g. COUNT(*), SUM(amount))
+            if (!\str_contains($col, '(')) {
+                $this->assertIdentifier($col);
+            }
+        }
         $this->selects = $columns;
         return $this;
     }
@@ -67,12 +73,14 @@ class QueryBuilder
 
     public function join(string $table, string $first, string $operator, string $second): static
     {
+        $this->assertIdentifier($table);
         $this->joins[] = "INNER JOIN `{$table}` ON `{$first}` {$operator} `{$second}`";
         return $this;
     }
 
     public function leftJoin(string $table, string $first, string $operator, string $second): static
     {
+        $this->assertIdentifier($table);
         $this->joins[] = "LEFT JOIN `{$table}` ON `{$first}` {$operator} `{$second}`";
         return $this;
     }
@@ -128,6 +136,7 @@ class QueryBuilder
 
     public function orderBy(string $column, string $direction = 'ASC'): static
     {
+        $this->assertIdentifier($column);
         $direction      = \strtoupper($direction) === 'DESC' ? 'DESC' : 'ASC';
         $this->orders[] = "`{$column}` {$direction}";
         return $this;
@@ -187,7 +196,8 @@ class QueryBuilder
 
     public function paginate(int $page, int $perPage = 15): array
     {
-        $total = $this->count();
+        $countBuilder = clone $this;
+        $total = $countBuilder->count();
         $items = $this->page($page, $perPage)->get();
 
         return [
@@ -277,5 +287,12 @@ class QueryBuilder
     {
         $this->wheres[] = [$bool, $column, $operator, $value];
         return $this;
+    }
+
+    private function assertIdentifier(string $name): void
+    {
+        if (!\preg_match('/^[a-zA-Z_][a-zA-Z0-9_.]*$/', $name)) {
+            throw new \InvalidArgumentException("Invalid SQL identifier: {$name}");
+        }
     }
 }

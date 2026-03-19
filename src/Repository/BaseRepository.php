@@ -101,7 +101,7 @@ abstract class BaseRepository implements RepositoryInterface
         return $this->hydrate($records);
     }
 
-    public function findById(int $id): ?array
+    public function findById(mixed $id): ?array
     {
         $record = $this->query()->where($this->primaryKey, $id)->first();
         if (!$record) return null;
@@ -144,7 +144,7 @@ abstract class BaseRepository implements RepositoryInterface
         return $qb->count();
     }
 
-    public function exists(string $column, mixed $value, ?int $excludeId = null): bool
+    public function exists(string $column, mixed $value, mixed $excludeId = null): bool
     {
         $qb = $this->query()->where($column, $value);
         if ($excludeId !== null) {
@@ -179,14 +179,15 @@ abstract class BaseRepository implements RepositoryInterface
         );
         $stmt->execute(\array_values($data));
 
-        $id = (int) $this->db->lastInsertId();
+        $id = $this->db->lastInsertId();
         return $this->findById($id) ?? \array_merge([$this->primaryKey => $id], $data);
     }
 
-    public function update(int $id, array $data): ?array
+    public function update(mixed $id, array $data): ?array
     {
         $data = $this->filterColumns($data);
         if (empty($data)) return $this->findById($id);
+        $data['updated_at'] = date('Y-m-d H:i:s');
 
         $set    = \implode(', ', \array_map(fn($c) => "`{$c}` = ?", \array_keys($data)));
         $params = \array_merge(\array_values($data), [$id]);
@@ -199,7 +200,7 @@ abstract class BaseRepository implements RepositoryInterface
         return $this->findById($id);
     }
 
-    public function delete(int $id): bool
+    public function delete(mixed $id): bool
     {
         if ($this->useSoftDeletes) {
             return $this->softDelete($id);
@@ -211,7 +212,7 @@ abstract class BaseRepository implements RepositoryInterface
         return $stmt->rowCount() > 0;
     }
 
-    public function softDelete(int $id): bool
+    public function softDelete(mixed $id): bool
     {
         $stmt = $this->db->getPdo()->prepare(
             "UPDATE `{$this->table}` SET `{$this->softDeleteColumn}` = CURRENT_TIMESTAMP WHERE `{$this->primaryKey}` = ?"
@@ -220,7 +221,7 @@ abstract class BaseRepository implements RepositoryInterface
         return $stmt->rowCount() > 0;
     }
 
-    public function restore(int $id): ?array
+    public function restore(mixed $id): ?array
     {
         $stmt = $this->db->getPdo()->prepare(
             "UPDATE `{$this->table}` SET `{$this->softDeleteColumn}` = NULL WHERE `{$this->primaryKey}` = ?"
@@ -255,6 +256,16 @@ abstract class BaseRepository implements RepositoryInterface
     public function getPrimaryKey(): string
     {
         return $this->primaryKey;
+    }
+
+    public function usesSoftDeletes(): bool
+    {
+        return $this->useSoftDeletes;
+    }
+
+    public function getSoftDeleteColumn(): string
+    {
+        return $this->softDeleteColumn;
     }
 
     /* ------------------------------------------------------------------ */
