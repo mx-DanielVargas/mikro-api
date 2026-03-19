@@ -14,6 +14,10 @@
 - Database Transactions
 - Attribute-Driven Migrations
 - Zero External Dependencies
+<<<<<<< feat/view-engine-and-fixes
+- Template Engine with Layouts, Sections & Includes
+=======
+>>>>>>> master
 - Swagger Documentation with Query Parameters
 - Soft Deletes Support
 
@@ -538,6 +542,70 @@ $db->transaction(function () use ($userRepo, $orderRepo, $data) {
 
 Automatically rolls back on exception and re-throws.
 
+<<<<<<< feat/view-engine-and-fixes
+## Template Engine
+
+MikroAPI includes a built-in template engine with Blade-like syntax.
+
+### Setup
+
+```php
+$app = new App();
+$app->useViews(__DIR__ . '/views');
+```
+
+### Use in Controllers
+
+```php
+#[Route('GET', '/')]
+public function index(Request $req): Response
+{
+    return Response::render('home', ['title' => 'Welcome', 'items' => ['A', 'B']]);
+}
+```
+
+### Template Syntax
+
+```php
+// views/layout.php
+<html>
+<head><title>{{ $title }}</title></head>
+<body>
+    @include('partials.nav')
+    @yield('content')
+</body>
+</html>
+
+// views/home.php
+@extends('layout')
+@section('content')
+    <h1>{{ $title }}</h1>
+    @foreach($items as $item)
+        <p>{{ $item }}</p>
+    @endforeach
+    @if($items)
+        <span>{{ count($items) }} items</span>
+    @else
+        <span>No items</span>
+    @endif
+@endsection
+```
+
+### Directives
+
+| Directive | Description |
+|-----------|-------------|
+| `{{ $var }}` | Escaped output (XSS-safe) |
+| `{!! $var !!}` | Raw output (no escaping) |
+| `@if` / `@elseif` / `@else` / `@endif` | Conditionals |
+| `@foreach($items as $item)` / `@endforeach` | Loops |
+| `@include('partial.name')` | Include sub-template (dot notation) |
+| `@extends('layout')` | Inherit from a layout |
+| `@section('name')` / `@endsection` | Define a section |
+| `@yield('name')` | Render a section in layout |
+
+=======
+>>>>>>> master
 ## Error Handling
 
 In production, set `APP_ENV=production` to hide internal error details:
@@ -567,6 +635,7 @@ Check the `examples/` directory for complete working examples:
 - `examples/basic/` - Simple API with CRUD operations
 - `examples/auth/` - JWT Authentication implementation
 - `examples/swagger/` - Complete Swagger/OpenAPI documentation example
+- `examples/views/` - Template engine with layouts and partials
 
 ## License
 
