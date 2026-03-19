@@ -37,6 +37,7 @@ abstract class BaseRepository implements RepositoryInterface
     protected string   $primaryKey       = 'id';
     protected string   $softDeleteColumn = 'deleted_at';
     protected bool     $useSoftDeletes   = false;
+    protected bool     $useTimestamps    = true;
     protected array    $fillable         = [];
 
     /** Relaciones a cargar en la próxima query */
@@ -187,7 +188,13 @@ abstract class BaseRepository implements RepositoryInterface
     {
         $data = $this->filterColumns($data);
         if (empty($data)) return $this->findById($id);
+<<<<<<< feat/view-engine-and-fixes
+        if ($this->useTimestamps) {
+            $data['updated_at'] = date('Y-m-d H:i:s');
+        }
+=======
         $data['updated_at'] = date('Y-m-d H:i:s');
+>>>>>>> master
 
         $set    = \implode(', ', \array_map(fn($c) => "`{$c}` = ?", \array_keys($data)));
         $params = \array_merge(\array_values($data), [$id]);
