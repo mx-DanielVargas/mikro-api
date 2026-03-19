@@ -1,5 +1,4 @@
 <?php
-// core/Repository/RelationLoader.php
 
 namespace MikroApi\Repository;
 
@@ -11,17 +10,6 @@ use MikroApi\Database\Database;
 
 /**
  * Carga relaciones definidas con atributos en batch (evita el problema N+1).
- *
- * En lugar de hacer una query por cada registro, agrupa los IDs y hace
- * una sola query por relación:
- *
- *   // Sin RelationLoader: 1 + N queries
- *   foreach ($users as $user) {
- *       $user['posts'] = $postRepo->findBy('user_id', $user['id']); // N queries
- *   }
- *
- *   // Con RelationLoader: 1 + 1 queries
- *   $loader->load($users, 'posts'); // una sola query con WHERE user_id IN (1,2,3...)
  */
 class RelationLoader
 {
@@ -32,13 +20,6 @@ class RelationLoader
         $this->db = $db;
     }
 
-    /**
-     * Carga las relaciones solicitadas sobre un conjunto de registros.
-     *
-     * @param array  $records         Registros sobre los que cargar relaciones
-     * @param array  $relations       Nombres de propiedades a cargar ['posts', 'roles', ...]
-     * @param string $repositoryClass Clase del repositorio que define las relaciones
-     */
     public function load(array $records, array $relations, string $repositoryClass): array
     {
         if (empty($records) || empty($relations)) {
@@ -91,7 +72,7 @@ class RelationLoader
         $localIds = $this->extractIds($records, $localKey);
         if (empty($localIds)) return $this->fillEmpty($records, $key, []);
 
-        $related = $this->fetchWhereIn($relRepo->getTable(), $rel->foreignKey, $localIds);
+        $related = $this->fetchWhereIn($relRepo->getTable(), $rel->foreignKey, $localIds, $relRepo);
 
         if ($nested !== null) {
             $related = $relRepo->loadWith($related, [$nested]);
@@ -119,7 +100,7 @@ class RelationLoader
         $localIds = $this->extractIds($records, $localKey);
         if (empty($localIds)) return $this->fillEmpty($records, $key, null);
 
-        $related = $this->fetchWhereIn($relRepo->getTable(), $rel->foreignKey, $localIds);
+        $related = $this->fetchWhereIn($relRepo->getTable(), $rel->foreignKey, $localIds, $relRepo);
 
         if ($nested !== null) {
             $related = $relRepo->loadWith($related, [$nested]);
@@ -147,7 +128,7 @@ class RelationLoader
         $foreignIds = $this->extractIds($records, $rel->foreignKey);
         if (empty($foreignIds)) return $this->fillEmpty($records, $key, null);
 
-        $related = $this->fetchWhereIn($relRepo->getTable(), $ownerKey, $foreignIds);
+        $related = $this->fetchWhereIn($relRepo->getTable(), $ownerKey, $foreignIds, $relRepo);
 
         if ($nested !== null) {
             $related = $relRepo->loadWith($related, [$nested]);
@@ -189,13 +170,18 @@ class RelationLoader
         }
 
         $holders = \implode(', ', \array_fill(0, \count($localIds), '?'));
+        $softDeleteClause = '';
+        if ($relRepo->usesSoftDeletes()) {
+            $softDeleteClause = " AND `{$relatedTable}`.`{$relRepo->getSoftDeleteColumn()}` IS NULL";
+        }
+
         $sql = "
             SELECT `{$relatedTable}`.*{$extraCols},
                    `{$pivotTable}`.`{$rel->foreignKey}` as `_pivot_fk`
             FROM `{$relatedTable}`
             INNER JOIN `{$pivotTable}`
                 ON `{$pivotTable}`.`{$rel->relatedKey}` = `{$relatedTable}`.`{$relatedPk}`
-            WHERE `{$pivotTable}`.`{$rel->foreignKey}` IN ({$holders})
+            WHERE `{$pivotTable}`.`{$rel->foreignKey}` IN ({$holders}){$softDeleteClause}
         ";
 
         $related = $this->db->query($sql, $localIds);
@@ -221,22 +207,21 @@ class RelationLoader
     /*  Helpers                                                             */
     /* ------------------------------------------------------------------ */
 
-    /**
-     * Instancia un repositorio pasándole la misma conexión DB.
-     * Evita que cada repo abra su propia conexión.
-     */
     private function makeRepo(string $repositoryClass): BaseRepository
     {
         return new $repositoryClass($this->db);
     }
 
-    private function fetchWhereIn(string $table, string $column, array $ids): array
+    private function fetchWhereIn(string $table, string $column, array $ids, ?BaseRepository $repo = null): array
     {
         $holders = \implode(', ', \array_fill(0, \count($ids), '?'));
-        return $this->db->query(
-            "SELECT * FROM `{$table}` WHERE `{$column}` IN ({$holders})",
-            $ids
-        );
+        $sql = "SELECT * FROM `{$table}` WHERE `{$column}` IN ({$holders})";
+
+        if ($repo !== null && $repo->usesSoftDeletes()) {
+            $sql .= " AND `{$repo->getSoftDeleteColumn()}` IS NULL";
+        }
+
+        return $this->db->query($sql, $ids);
     }
 
     private function extractIds(array $records, string $key): array

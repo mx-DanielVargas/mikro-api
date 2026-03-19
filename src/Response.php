@@ -75,6 +75,7 @@ class Response
         return $res;
     }
 
+<<<<<<< feat/view-engine-and-fixes
     public static function render(string $view, array $data = [], int $status = 200): self
     {
         if (!self::$viewEngine) {
@@ -83,6 +84,8 @@ class Response
         return self::html(self::$viewEngine->render($view, $data), $status);
     }
 
+=======
+>>>>>>> master
     /* ------------------------------------------------------------------ */
     /*  Fluent modifiers                                                    */
     /* ------------------------------------------------------------------ */

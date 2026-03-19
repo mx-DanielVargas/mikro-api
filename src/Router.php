@@ -1,5 +1,5 @@
 <?php
-// core/Router.php
+
 namespace MikroApi;
 
 use MikroApi\Attributes\Body;
@@ -11,6 +11,13 @@ class Router
 {
     /** @var array<int, array{method:string, pattern:string, regex:string, paramNames:string[], controller:string, action:string, guards:string[], dto:string|null}> */
     private array $routes = [];
+
+    private ?Container $container = null;
+
+    public function setContainer(Container $container): void
+    {
+        $this->container = $container;
+    }
 
     /* ------------------------------------------------------------------ */
     /*  Registro                                                            */
@@ -98,7 +105,7 @@ class Router
             // Ejecutar guards
             foreach ($route['guards'] as $guardClass) {
                 /** @var GuardInterface $guard */
-                $guard = new $guardClass();
+                $guard = $this->resolve($guardClass);
                 if (!$guard->canActivate($request)) {
                     return $guard->deny();
                 }
@@ -116,12 +123,11 @@ class Router
                     ], 422);
                 }
 
-                // El DTO validado y casteado queda disponible en $request->dto
                 $request->dto = $dto;
             }
 
             // Ejecutar método del controlador
-            $controller = new $route['controller']();
+            $controller = $this->resolve($route['controller']);
             $action     = $route['action'];
             $response   = $controller->$action($request);
 
@@ -138,6 +144,14 @@ class Router
     /* ------------------------------------------------------------------ */
     /*  Helpers                                                             */
     /* ------------------------------------------------------------------ */
+
+    private function resolve(string $class): object
+    {
+        if ($this->container !== null) {
+            return $this->container->get($class);
+        }
+        return new $class();
+    }
 
     /**
      * Convierte /users/:id/posts/:postId
