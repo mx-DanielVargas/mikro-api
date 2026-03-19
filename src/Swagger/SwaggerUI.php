@@ -2,6 +2,8 @@
 
 namespace MikroApi\Swagger;
 
+use MikroApi\Response;
+
 /**
  * Sirve la interfaz Swagger UI y el endpoint del spec JSON.
  * Usa Swagger UI desde CDN — no requiere instalación.
@@ -14,46 +16,35 @@ class SwaggerUI
         private string $jsonPath, // ej: /docs/json
     ) {}
 
-    /**
-     * Verifica si la ruta actual corresponde a alguno de los endpoints de docs.
-     */
     public function matches(string $path): bool
     {
         return $path === $this->uiPath || $path === $this->jsonPath;
     }
 
-    /**
-     * Despacha la respuesta correcta según la ruta.
-     */
-    public function handle(string $path): void
+    public function handle(string $path): Response
     {
         if ($path === $this->jsonPath) {
-            $this->serveJson();
-        } else {
-            $this->serveHtml();
+            return $this->serveJson();
         }
+        return $this->serveHtml();
     }
 
-    /* ------------------------------------------------------------------ */
-
-    private function serveJson(): void
+    private function serveJson(): Response
     {
-        \header('Content-Type: application/json; charset=utf-8');
-        \header('Access-Control-Allow-Origin: *');
-        echo \json_encode($this->spec, \JSON_PRETTY_PRINT | \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE);
-        exit;
+        $json = \json_encode($this->spec, \JSON_PRETTY_PRINT | \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE);
+        return Response::json($this->spec)
+            ->withHeader('Access-Control-Allow-Origin', '*');
     }
 
-    private function serveHtml(): void
+    private function serveHtml(): Response
     {
-        \header('Content-Type: text/html; charset=utf-8');
-        $jsonUrl  = $this->jsonPath;
-        $title    = \htmlspecialchars($this->spec['info']['title'] ?? 'API Docs');
-        $version  = \htmlspecialchars($this->spec['info']['version'] ?? '');
+        $jsonUrl = $this->jsonPath;
+        $title   = \htmlspecialchars($this->spec['info']['title'] ?? 'API Docs');
+        $version = \htmlspecialchars($this->spec['info']['version'] ?? '');
 
-        echo <<<HTML
+        $html = <<<HTML
 <!DOCTYPE html>
-<html lang="es">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -84,6 +75,7 @@ class SwaggerUI
 </body>
 </html>
 HTML;
-        exit;
+
+        return Response::html($html);
     }
 }

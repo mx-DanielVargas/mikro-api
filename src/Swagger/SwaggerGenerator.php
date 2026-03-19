@@ -6,6 +6,7 @@ use MikroApi\Attributes\ApiDoc;
 use MikroApi\Attributes\ApiTag;
 use MikroApi\Attributes\Body;
 use MikroApi\Attributes\Controller;
+use MikroApi\Attributes\QueryParam;
 use MikroApi\Attributes\Route;
 use MikroApi\Attributes\UseGuards;
 
@@ -187,8 +188,10 @@ class SwaggerGenerator
 
         // Path parameters (:id → {id})
         $pathParams = $this->extractPathParams($fullPath);
-        if (!empty($pathParams)) {
-            $operation['parameters'] = $pathParams;
+        $queryParams = $this->extractQueryParams($method);
+        $allParams = array_merge($pathParams, $queryParams);
+        if (!empty($allParams)) {
+            $operation['parameters'] = $allParams;
         }
 
         // Security si hay guards de auth
@@ -357,6 +360,29 @@ class SwaggerGenerator
             'required' => true,
             'schema'   => ['type' => 'string'],
         ], $matches[1]);
+    }
+
+    private function extractQueryParams(\ReflectionMethod $method): array
+    {
+        $params = [];
+        foreach ($method->getAttributes(QueryParam::class) as $attr) {
+            /** @var QueryParam $qp */
+            $qp = $attr->newInstance();
+            $param = [
+                'name'     => $qp->name,
+                'in'       => 'query',
+                'required' => $qp->required,
+                'schema'   => ['type' => $qp->type],
+            ];
+            if ($qp->description) {
+                $param['description'] = $qp->description;
+            }
+            if ($qp->example !== null) {
+                $param['example'] = $qp->example;
+            }
+            $params[] = $param;
+        }
+        return $params;
     }
 
     private function hasAuthGuard(array $guards): bool

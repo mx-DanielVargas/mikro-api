@@ -69,6 +69,14 @@ class Database
         return self::$instance;
     }
 
+    /**
+     * Resetea la instancia singleton. Útil para tests.
+     */
+    public static function reset(): void
+    {
+        self::$instance = null;
+    }
+
     public function getDriver(): string
     {
         return $this->driver;
@@ -102,6 +110,27 @@ class Database
     public function lastInsertId(): string
     {
         return $this->pdo->lastInsertId();
+    }
+
+    /**
+     * Executes a callback inside a database transaction.
+     * Rolls back on exception and re-throws.
+     *
+     * @template T
+     * @param callable(): T $callback
+     * @return T
+     */
+    public function transaction(callable $callback): mixed
+    {
+        $this->pdo->beginTransaction();
+        try {
+            $result = $callback();
+            $this->pdo->commit();
+            return $result;
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
     }
 
     /* ------------------------------------------------------------------ */
