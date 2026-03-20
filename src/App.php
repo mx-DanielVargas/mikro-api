@@ -3,6 +3,7 @@
 namespace MikroApi;
 
 use MikroApi\Middleware\MiddlewareInterface;
+use MikroApi\Config\ConfigService;
 use MikroApi\Swagger\SwaggerGenerator;
 use MikroApi\Swagger\SwaggerUI;
 
@@ -47,6 +48,23 @@ class App
     public function useViews(string $viewsPath, string $extension = '.php'): self
     {
         Response::setViewEngine(new View\Engine($viewsPath, $extension));
+        return $this;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Config                                                              */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Load .env configuration and register ConfigService in the container.
+     *
+     * @param string $basePath  Directory containing .env file
+     * @param string $envFile   Filename (default: .env)
+     */
+    public function useConfig(string $basePath, string $envFile = '.env'): self
+    {
+        $config = new ConfigService($basePath, $envFile);
+        $this->container->instance(ConfigService::class, $config);
         return $this;
     }
 

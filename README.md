@@ -14,6 +14,7 @@
 - Database Transactions
 - Attribute-Driven Migrations
 - Zero External Dependencies
+- Environment Configuration (.env) with Typed Accessors
 <<<<<<< feat/view-engine-and-fixes
 - Template Engine with Layouts, Sections & Includes
 =======
@@ -606,6 +607,88 @@ public function index(Request $req): Response
 
 =======
 >>>>>>> master
+## Configuration
+
+MikroAPI includes a configuration service inspired by `@nestjs/config` for managing environment variables.
+
+### Setup
+
+```php
+$app = new App();
+$app->useConfig(__DIR__); // loads .env from project root
+```
+
+This loads your `.env` file and registers `ConfigService` in the container for injection.
+
+### .env File
+
+```env
+APP_ENV=development
+DB_HOST=localhost
+DB_PORT=3306
+DB_NAME=myapp
+JWT_SECRET=my-secret-key
+
+# Variable interpolation
+APP_URL=http://${DB_HOST}:8000
+```
+
+Environment-specific overrides are loaded automatically: if `APP_ENV=production`, then `.env.production` is also loaded.
+
+### Use in Services
+
+```php
+use MikroApi\Config\ConfigService;
+
+class MailService
+{
+    public function __construct(private ConfigService $config) {}
+
+    public function send(string $to, string $subject, string $body): bool
+    {
+        $host = $this->config->get('SMTP_HOST', 'localhost');
+        $port = $this->config->getInt('SMTP_PORT', 587);
+        // ...
+    }
+}
+```
+
+### Typed Accessors
+
+```php
+$config->get('KEY');                  // string|null
+$config->get('KEY', 'default');       // with default
+$config->getOrThrow('KEY');           // throws if missing
+$config->getInt('PORT', 3306);        // int
+$config->getBool('DEBUG', false);     // bool
+$config->getFloat('RATE', 0.5);      // float
+$config->set('KEY', 'value');         // runtime override
+```
+
+### Namespaced Config
+
+Group related config with `register()`, then access via dot-notation:
+
+```php
+$config->register('database', [
+    'host' => $config->get('DB_HOST', 'localhost'),
+    'port' => $config->getInt('DB_PORT', 3306),
+    'name' => $config->getOrThrow('DB_NAME'),
+]);
+
+$config->get('database.host');  // 'localhost'
+$config->get('database.port');  // 3306
+```
+
+### Validation
+
+Ensure required variables are present at startup:
+
+```php
+$config->validate(['DB_HOST', 'DB_NAME', 'JWT_SECRET']);
+// Throws RuntimeException listing all missing keys
+```
+
 ## Error Handling
 
 In production, set `APP_ENV=production` to hide internal error details:
