@@ -49,9 +49,6 @@ class Router
             $routeAttrs = $method->getAttributes(Route::class);
             if (empty($routeAttrs)) continue;
 
-            /** @var Route $routeAttr */
-            $routeAttr = $routeAttrs[0]->newInstance();
-
             // Guards del método
             $methodGuards = [];
             foreach ($method->getAttributes(UseGuards::class) as $guardAttr) {
@@ -69,21 +66,27 @@ class Router
                 $dtoClass = $bodyAttr->dtoClass;
             }
 
-            $fullPath = rtrim($prefix, '/') . '/' . ltrim($routeAttr->path, '/');
-            $fullPath = rtrim($fullPath, '/') ?: '/';
+            // Register a route entry for each #[Route] attribute
+            foreach ($routeAttrs as $rAttr) {
+                /** @var Route $routeAttr */
+                $routeAttr = $rAttr->newInstance();
 
-            [$regex, $paramNames] = $this->buildRegex($fullPath);
+                $fullPath = rtrim($prefix, '/') . '/' . ltrim($routeAttr->path, '/');
+                $fullPath = rtrim($fullPath, '/') ?: '/';
 
-            $this->routes[] = [
-                'method'     => strtoupper($routeAttr->method),
-                'pattern'    => $fullPath,
-                'regex'      => $regex,
-                'paramNames' => $paramNames,
-                'controller' => $controllerClass,
-                'action'     => $method->getName(),
-                'guards'     => array_merge($classGuards, $methodGuards),
-                'dto'        => $dtoClass,
-            ];
+                [$regex, $paramNames] = $this->buildRegex($fullPath);
+
+                $this->routes[] = [
+                    'method'     => strtoupper($routeAttr->method),
+                    'pattern'    => $fullPath,
+                    'regex'      => $regex,
+                    'paramNames' => $paramNames,
+                    'controller' => $controllerClass,
+                    'action'     => $method->getName(),
+                    'guards'     => array_merge($classGuards, $methodGuards),
+                    'dto'        => $dtoClass,
+                ];
+            }
         }
     }
 
