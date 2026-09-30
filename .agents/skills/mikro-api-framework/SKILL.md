@@ -47,6 +47,7 @@ MikroAPI is a minimalist, zero-external-dependency PHP 8.1+ framework (NestJS-in
 - **PDO/SQLite bool binding**: binding a PHP `bool` into an `INTEGER` column can insert an empty string instead of `0`/`1` — cast explicitly to `(int)` before writing booleans.
 - Guards/middleware/DTO validation all run **before** the controller method — a controller only ever sees a request that already passed auth + validation.
 - `RelationLoader` can resolve related repositories with extra constructor dependencies via the DI Container (`ContainerAwareInterface`), but only if the repository was itself resolved through the Container (not `new SomeRepository($db)` directly).
+- **After `vendor/bin/mikro-migrate init` on a project whose `composer.json` already existed**, always tell the user to run `composer dump-autoload` (or `composer install`) next — `init` merges the required `autoload.psr-4`/`require` entries into the file, but Composer only regenerates its autoloader on install/update/dump-autoload, not on a plain `composer.json` edit. Skipping this step causes `Uncaught ReflectionException: Class "App\Controllers\...Controller" does not exist` in `Router.php`.
 
 ## End-to-end: add a resource (e.g. "Product")
 
