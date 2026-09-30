@@ -73,6 +73,38 @@ class RouterCacheTest extends TestCase
         $this->assertEquals('world', $request->params['name']);
     }
 
+    public function testLoadFromCacheReturnsFalseOnCorruptFile(): void
+    {
+        $this->cacheFile = $this->makeTempCacheFile();
+        \file_put_contents($this->cacheFile, "<?php\n\nreturn array (\n  0 =>\n  array (\n");
+
+        $router = new Router();
+        $this->assertFalse($router->loadFromCache($this->cacheFile));
+    }
+
+    public function testLoadFromCacheReturnsFalseOnInvalidStructure(): void
+    {
+        $this->cacheFile = $this->makeTempCacheFile();
+        \file_put_contents($this->cacheFile, "<?php\n\nreturn [['foo' => 'bar']];\n");
+
+        $router = new Router();
+        $this->assertFalse($router->loadFromCache($this->cacheFile));
+    }
+
+    public function testCacheToWritesAtomically(): void
+    {
+        $this->cacheFile = $this->makeTempCacheFile();
+
+        $router = new Router();
+        $router->registerController(CacheableController::class);
+        $router->cacheTo($this->cacheFile);
+
+        $this->assertFileExists($this->cacheFile);
+
+        $residualTmpFiles = \glob($this->cacheFile . '.*.tmp');
+        $this->assertSame([], $residualTmpFiles);
+    }
+
     private function makeTempCacheFile(): string
     {
         return \sys_get_temp_dir() . '/mikroapi_test_routes_' . \uniqid() . '.php';
@@ -98,3 +130,5 @@ class CacheableController
         return Response::json(['name' => $request->params['name']]);
     }
 }
+
+

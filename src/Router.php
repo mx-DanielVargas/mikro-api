@@ -111,12 +111,26 @@ class Router
             return false;
         }
 
-        $cached = require $path;
+        try {
+            $cached = require $path;
+        } catch (\Throwable $e) {
+            return false; // archivo de caché corrupto: fallback silencioso a reflexión
+        }
+
         if (!\is_array($cached)) {
             return false;
         }
 
-        $this->routes         = $cached;
+        foreach ($cached as $route) {
+            if (!\is_array($route) || !isset(
+                $route['method'], $route['regex'], $route['paramNames'],
+                $route['controller'], $route['action'], $route['guards']
+            )) {
+                return false; // estructura inesperada: no confiar en este caché
+            }
+        }
+
+        $this->routes          = $cached;
         $this->loadedFromCache = true;
         return true;
     }
@@ -129,13 +143,20 @@ class Router
     public function cacheTo(string $path): void
     {
         $dir = \dirname($path);
-        if (!\is_dir($dir)) {
-            \mkdir($dir, 0755, true);
+        if (!\is_dir($dir) && !@\mkdir($dir, 0755, true) && !\is_dir($dir)) {
+            throw new \RuntimeException("No se pudo crear el directorio de caché: {$dir}");
         }
 
-        $export = \var_export($this->routes, true);
+        $export   = \var_export($this->routes, true);
         $contents = "<?php\n\n// Generado automáticamente por App::cacheRoutes(). No editar a mano.\nreturn {$export};\n";
-        \file_put_contents($path, $contents);
+
+        // Escritura atómica: se escribe a un archivo temporal en el mismo
+        // directorio y se usa rename() (atómico en POSIX) para que ningún
+        // lector vea nunca un archivo parcialmente escrito bajo múltiples
+        // workers concurrentes (Ronda 2, hallazgo crítico).
+        $tmp = $path . '.' . \bin2hex(\random_bytes(4)) . '.tmp';
+        \file_put_contents($tmp, $contents);
+        \rename($tmp, $path);
     }
 
     /* ------------------------------------------------------------------ */
