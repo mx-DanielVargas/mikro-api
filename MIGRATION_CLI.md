@@ -1,8 +1,8 @@
-# MikroAPI Migration CLI
+# MikroAPI CLI
 
 ## Overview
 
-MikroAPI includes a powerful CLI tool for managing database migrations. The tool is automatically available after installing the package via Composer.
+MikroAPI includes a powerful CLI tool for managing database migrations, scaffolding new projects, and generating boilerplate code (controllers, repositories, DTOs, middleware, guards, services). The tool is automatically available after installing the package via Composer.
 
 ## Installation
 
@@ -19,6 +19,60 @@ vendor/bin/mikro-migrate
 ```
 
 ## Commands
+
+### Scaffold a New Project
+
+```bash
+vendor/bin/mikro-migrate init [path]
+```
+
+Generates a complete, ready-to-run project structure (default: current directory):
+
+```
+<path>/
+├── public/index.php          Front controller, already wired (useConfig, useViews, middlewares, HomeController)
+├── src/
+│   ├── Controllers/            HomeController.php included as a starting point
+│   ├── Repositories/           empty, ready for make:repository
+│   ├── DTOs/                   empty, ready for make:dto
+│   ├── Middleware/              empty, ready for make:middleware
+│   ├── Guards/                  empty, ready for make:guard
+│   └── Services/                empty, ready for make:service
+├── database/migrations/         a starter create_users_table migration
+├── config/database.php          SQLite by default, MySQL alternative commented out
+├── views/home.php                sample view using {{ }} interpolation
+├── .env / .env.example            APP_*/DB_* variables
+├── .gitignore
+├── composer.json                  only created if one doesn't already exist
+└── README.md                      documents the structure and CLI commands
+```
+
+`init` is safe to re-run: any file that already exists is skipped (never
+overwritten), so you can use it to fill in missing pieces of a partially
+set up project without losing existing work.
+
+### Generate Code
+
+```bash
+vendor/bin/mikro-migrate make:controller <Name>   # src/Controllers/<Name>Controller.php
+vendor/bin/mikro-migrate make:repository <Name>   # src/Repositories/<Name>Repository.php
+vendor/bin/mikro-migrate make:dto <Name>          # src/DTOs/<Name>Dto.php
+vendor/bin/mikro-migrate make:middleware <Name>   # src/Middleware/<Name>Middleware.php
+vendor/bin/mikro-migrate make:guard <Name>        # src/Guards/<Name>Guard.php
+vendor/bin/mikro-migrate make:service <Name>      # src/Services/<Name>Service.php
+```
+
+Each generator accepts names in `PascalCase`, `snake_case`, or `kebab-case`
+(e.g. `make:controller product`, `make:controller Product`, and
+`make:controller create-product` all resolve sensibly), and automatically
+appends the matching suffix (`Controller`, `Repository`, ...) if you didn't
+include it. Generated stubs use the `App\` namespace, matching the
+`composer.json` created by `init` — adjust the namespace if your project
+uses a different PSR-4 mapping.
+
+Unlike `init`, these generators **refuse to overwrite** an existing file:
+they print an error and exit with a non-zero status instead, so they're
+safe to use in scripts.
 
 ### Create Migration
 
@@ -75,6 +129,8 @@ composer exec mikro-migrate rollback
 composer exec mikro-migrate status
 composer exec mikro-migrate reset
 composer exec mikro-migrate make create_users_table
+composer exec mikro-migrate init
+composer exec mikro-migrate make:controller Product
 ```
 
 ## Configuration
@@ -155,6 +211,10 @@ class CreateUsersTable extends Migration
 ## Workflow Example
 
 ```bash
+# 0. New project? Scaffold the whole structure first.
+vendor/bin/mikro-migrate init
+composer install
+
 # 1. Create a new migration
 vendor/bin/mikro-migrate make create_products_table
 
@@ -164,10 +224,15 @@ vendor/bin/mikro-migrate make create_products_table
 # 3. Run the migration
 vendor/bin/mikro-migrate migrate
 
-# 4. Check status
+# 4. Generate the matching repository, controller, and DTO
+vendor/bin/mikro-migrate make:repository Product
+vendor/bin/mikro-migrate make:controller Product
+vendor/bin/mikro-migrate make:dto CreateProduct
+
+# 5. Check migration status
 vendor/bin/mikro-migrate status
 
-# 5. If needed, rollback
+# 6. If needed, rollback
 vendor/bin/mikro-migrate rollback
 ```
 
@@ -180,6 +245,21 @@ If `vendor/bin/mikro-migrate` is not found:
 1. Make sure you ran `composer install`
 2. Check that `vendor/bin/` exists
 3. Try using the full path: `./vendor/bin/mikro-migrate`
+
+### Generated file already exists
+
+`make:controller`, `make:repository`, `make:dto`, `make:middleware`,
+`make:guard`, and `make:service` never overwrite an existing file — they
+print `✗ Already exists, skipped: ...` and exit with a non-zero status.
+Rename/move the existing file first, or edit it directly instead of
+regenerating it.
+
+### `init` didn't create something I expected
+
+`init` also never overwrites existing files — if a file already exists at
+the target path (even an empty one), it's skipped with a `- skipped
+(already exists): ...` message. Delete or rename the conflicting file and
+re-run `init` to have it generated.
 
 ### Database configuration not found
 

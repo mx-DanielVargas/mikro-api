@@ -464,6 +464,25 @@ Relations respect soft deletes automatically.
 
 ## Migrations
 
+### Scaffold a New Project
+
+```bash
+vendor/bin/mikro-migrate init
+```
+
+Generates a ready-to-run project structure (`public/index.php`, `src/Controllers|Repositories|DTOs|Middleware|Guards|Services`, `config/database.php`, a starter migration, `.env`, `composer.json`...). Safe to re-run — never overwrites existing files. See [`MIGRATION_CLI.md`](./MIGRATION_CLI.md) for the full structure it creates.
+
+### Generate Code
+
+```bash
+vendor/bin/mikro-migrate make:controller Product
+vendor/bin/mikro-migrate make:repository Product
+vendor/bin/mikro-migrate make:dto CreateProduct
+vendor/bin/mikro-migrate make:middleware RequestId
+vendor/bin/mikro-migrate make:guard Jwt
+vendor/bin/mikro-migrate make:service Product
+```
+
 ### Create Migration
 
 ```bash
