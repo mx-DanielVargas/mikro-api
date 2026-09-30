@@ -3,6 +3,7 @@
 
 namespace MikroApi\Repository;
 
+use MikroApi\Container;
 use MikroApi\Database\Database;
 
 /**
@@ -43,6 +44,8 @@ abstract class BaseRepository implements RepositoryInterface
     /** Relaciones a cargar en la próxima query */
     private array $eagerLoad = [];
 
+    protected ?Container $container = null;
+
     public function __construct(?Database $db = null)
     {
         $this->db = $db ?? Database::getInstance();
@@ -73,7 +76,7 @@ abstract class BaseRepository implements RepositoryInterface
     {
         if (empty($records) || empty($relations)) return $records;
 
-        $loader = new RelationLoader($this->db);
+        $loader = new RelationLoader($this->db, $this->container);
         return $loader->load($records, $relations, static::class);
     }
 
@@ -284,6 +287,21 @@ abstract class BaseRepository implements RepositoryInterface
         return $this->softDeleteColumn;
     }
 
+    /**
+     * Inyecta el Container de la aplicación, permitiendo que RelationLoader
+     * resuelva repositorios relacionados con dependencias adicionales más
+     * allá de Database (AUD-009). Se llama automáticamente cuando el
+     * repositorio se resuelve vía Container::get()/make().
+     */
+    public function setContainer(Container $container): static
+    {
+        $this->container = $container;
+        if (!$container->has(Database::class)) {
+            $container->instance(Database::class, $this->db);
+        }
+        return $this;
+    }
+
     /* ------------------------------------------------------------------ */
     /*  Helpers privados                                                    */
     /* ------------------------------------------------------------------ */
@@ -300,7 +318,7 @@ abstract class BaseRepository implements RepositoryInterface
         $relations       = $this->eagerLoad;
         $this->eagerLoad = []; // limpiar para no reutilizar en la próxima llamada
 
-        $loader = new RelationLoader($this->db);
+        $loader = new RelationLoader($this->db, $this->container);
         return $loader->load($records, $relations, static::class);
     }
 

@@ -2,7 +2,10 @@
 
 namespace MikroApi\Tests;
 
+use MikroApi\Attributes\Relation\HasMany;
 use MikroApi\Container;
+use MikroApi\Database\Database;
+use MikroApi\Repository\BaseRepository;
 use PHPUnit\Framework\TestCase;
 
 class ContainerTest extends TestCase
@@ -117,6 +120,93 @@ class ContainerTest extends TestCase
         $this->assertInstanceOf(ContainerWithDefault::class, $obj);
         $this->assertEquals(42, $obj->value);
     }
+
+    public function testAutowireInjectsContainerIntoBaseRepository(): void
+    {
+        Database::reset();
+        $db = Database::connect(['driver' => 'sqlite', 'database' => ':memory:']);
+        $this->container->instance(Database::class, $db);
+
+        $repo = $this->container->get(ContainerDummyRepository::class);
+
+        $this->assertInstanceOf(ContainerDummyRepository::class, $repo);
+        $this->assertSame($this->container, $repo->getContainer());
+    }
+
+    public function testSetContainerRegistersOwnDatabaseIfMissing(): void
+    {
+        Database::reset();
+        $db = Database::connect(['driver' => 'sqlite', 'database' => ':memory:']);
+
+        // Repo creado directamente (sin pasar por el Container), como hacen
+        // hoy los repos de la app y los tests existentes.
+        $repo = new ContainerDummyRepository($db);
+
+        $this->assertFalse($this->container->has(Database::class));
+
+        $repo->setContainer($this->container);
+
+        $this->assertTrue($this->container->has(Database::class));
+        $this->assertSame($db, $this->container->get(Database::class));
+    }
+
+    public function testRelationLoaderResolvesRelatedRepositoryWithExtraDependencyViaContainer(): void
+    {
+        Database::reset();
+        $db = Database::connect([
+            'driver'   => 'sqlite',
+            'database' => ':memory:',
+        ]);
+        $db->execute('CREATE TABLE dummy_related (id INTEGER PRIMARY KEY, dummy_id INTEGER)');
+        $db->execute('INSERT INTO dummy_related (dummy_id) VALUES (1)');
+
+        // Repo "principal" creado directamente y luego conectado al Container,
+        // igual que ocurriría si un repo fue resuelto vía Container::get()/make().
+        $repo = new ContainerDummyRepositoryWithRelation($db);
+        $repo->setContainer($this->container);
+
+        // Si RelationLoader::makeRepo() cayera de vuelta a `new $repositoryClass($this->db)`
+        // en lugar de usar el Container, esto lanzaría un TypeError porque el
+        // repositorio relacionado requiere ContainerExtraService, no Database, como
+        // primer parámetro de su constructor.
+        $result = $repo->loadWith([['id' => 1]], ['related']);
+
+        $this->assertArrayHasKey('related', $result[0]);
+        $this->assertCount(1, $result[0]['related']);
+        $this->assertEquals(1, $result[0]['related'][0]['dummy_id']);
+    }
+}
+
+// ── Fixtures para AUD-009 (Container + BaseRepository + RelationLoader) ──
+
+class ContainerDummyRepository extends BaseRepository
+{
+    protected string $table = 'dummy';
+
+    public function getContainer(): ?Container
+    {
+        return $this->container;
+    }
+}
+
+class ContainerExtraService {}
+
+class ContainerRelatedRepositoryWithExtraDependency extends BaseRepository
+{
+    protected string $table = 'dummy_related';
+
+    public function __construct(public ContainerExtraService $service, ?Database $db = null)
+    {
+        parent::__construct($db);
+    }
+}
+
+class ContainerDummyRepositoryWithRelation extends BaseRepository
+{
+    protected string $table = 'dummy';
+
+    #[HasMany(repository: ContainerRelatedRepositoryWithExtraDependency::class, foreignKey: 'dummy_id')]
+    public array $related;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────

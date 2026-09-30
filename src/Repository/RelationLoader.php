@@ -14,10 +14,12 @@ use MikroApi\Database\Database;
 class RelationLoader
 {
     private Database $db;
+    private ?\MikroApi\Container $container;
 
-    public function __construct(Database $db)
+    public function __construct(Database $db, ?\MikroApi\Container $container = null)
     {
         $this->db = $db;
+        $this->container = $container;
     }
 
     public function load(array $records, array $relations, string $repositoryClass): array
@@ -209,6 +211,11 @@ class RelationLoader
 
     private function makeRepo(string $repositoryClass): BaseRepository
     {
+        if ($this->container !== null) {
+            /** @var BaseRepository $repo */
+            $repo = $this->container->make($repositoryClass);
+            return $repo;
+        }
         return new $repositoryClass($this->db);
     }
 

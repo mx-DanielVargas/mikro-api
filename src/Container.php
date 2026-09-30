@@ -2,6 +2,8 @@
 
 namespace MikroApi;
 
+use MikroApi\Repository\BaseRepository;
+
 /**
  * Contenedor de inyección de dependencias con autowiring.
  *
@@ -122,6 +124,14 @@ class Container
             }
         }
 
-        return $ref->newInstanceArgs($args);
+        $instance = $ref->newInstanceArgs($args);
+
+        // Inyecta el container en repositorios para que RelationLoader pueda
+        // resolver repos relacionados con dependencias adicionales vía DI (AUD-009).
+        if ($instance instanceof BaseRepository) {
+            $instance->setContainer($this);
+        }
+
+        return $instance;
     }
 }
