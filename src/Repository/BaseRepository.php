@@ -294,9 +294,27 @@ abstract class BaseRepository implements RepositoryInterface
     protected function filterColumns(array $data): array
     {
         if (!empty($this->fillable)) {
-            return \array_intersect_key($data, \array_flip($this->fillable));
+            $data = \array_intersect_key($data, \array_flip($this->fillable));
+        } else {
+            unset($data[$this->primaryKey], $data['created_at'], $data['updated_at'], $data['deleted_at']);
         }
-        unset($data[$this->primaryKey], $data['created_at'], $data['updated_at'], $data['deleted_at']);
+
+        foreach (\array_keys($data) as $column) {
+            $this->assertValidColumnName($column);
+        }
+
         return $data;
+    }
+
+    /**
+     * Valida que un nombre de columna sea un identificador SQL seguro.
+     * Previene inyección SQL cuando las claves del array de datos provienen
+     * directamente del body de la request y $fillable no está definido (AUD-002).
+     */
+    protected function assertValidColumnName(string $name): void
+    {
+        if (!\preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $name)) {
+            throw new \InvalidArgumentException("Invalid column name: {$name}");
+        }
     }
 }
