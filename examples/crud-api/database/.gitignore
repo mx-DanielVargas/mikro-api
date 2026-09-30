@@ -1,0 +1,5 @@
+# SQLite database files generated automatically on first request by
+# MigrationRunner + the seed data in index.php. Safe to delete anytime
+# to reset the example to a clean state.
+*.sqlite
+*.sqlite-*
