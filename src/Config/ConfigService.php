@@ -170,9 +170,20 @@ class ConfigService
             $key   = trim(substr($line, 0, $eqPos));
             $value = trim(substr($line, $eqPos + 1));
 
-            // Strip surrounding quotes
-            if (strlen($value) >= 2 && (($value[0] === '"' && $value[-1] === '"') || ($value[0] === "'" && $value[-1] === "'"))) {
-                $value = substr($value, 1, -1);
+            $firstChar = $value[0] ?? '';
+            if ($firstChar === '"' || $firstChar === "'") {
+                // Valor entre comillas: tomar el contenido hasta la comilla de cierre.
+                // Todo lo posterior (incluido un posible comentario) se descarta.
+                $closingPos = strpos($value, $firstChar, 1);
+                $value = $closingPos !== false
+                    ? substr($value, 1, $closingPos - 1)
+                    : substr($value, 1);
+            } else {
+                // Sin comillas: permitir un comentario al final de línea, siempre que
+                // esté precedido por al menos un espacio (AUD-012). Un '#' pegado al
+                // valor (ej. una URL con #fragment) NO se trata como comentario.
+                $value = preg_replace('/\s+#.*$/', '', $value);
+                $value = rtrim($value);
             }
 
             // Variable interpolation: ${VAR} references

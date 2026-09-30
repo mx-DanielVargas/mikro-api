@@ -58,6 +58,30 @@ class ConfigServiceTest extends TestCase
         $this->assertSame('single', $config->get('B'));
     }
 
+    public function testStripsTrailingInlineComment(): void
+    {
+        $this->writeEnv("KEY=value # comentario");
+        $config = new ConfigService($this->tmpDir);
+
+        $this->assertSame('value', $config->get('KEY'));
+    }
+
+    public function testPreservesHashInsideQuotesAsLiteral(): void
+    {
+        $this->writeEnv('KEY="value # no es comentario"');
+        $config = new ConfigService($this->tmpDir);
+
+        $this->assertSame('value # no es comentario', $config->get('KEY'));
+    }
+
+    public function testHashWithoutLeadingSpaceIsNotTreatedAsComment(): void
+    {
+        $this->writeEnv('KEY=https://example.com/x#fragment');
+        $config = new ConfigService($this->tmpDir);
+
+        $this->assertSame('https://example.com/x#fragment', $config->get('KEY'));
+    }
+
     public function testVariableInterpolation(): void
     {
         $this->writeEnv("HOST=localhost\nURL=http://\${HOST}:8000");
