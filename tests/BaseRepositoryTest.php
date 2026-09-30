@@ -271,6 +271,38 @@ class BaseRepositoryTest extends TestCase
         $this->assertNotNull($restored);
         $this->assertNull($restored['deleted_at']);
     }
+
+    public function testCreateWithoutReloadSkipsSelect(): void
+    {
+        $data = ['name' => 'No Reload', 'email' => 'noreload@example.com'];
+
+        $user = $this->userRepo->create($data, reload: false);
+
+        // El resultado debe ser exactamente el merge de id + datos originales,
+        // sin campos que solo vendrían de un SELECT real (created_at, updated_at, deleted_at).
+        $this->assertArrayHasKey('id', $user);
+        $this->assertEquals(\array_merge(['id' => $user['id']], $data), $user);
+        $this->assertArrayNotHasKey('created_at', $user);
+        $this->assertArrayNotHasKey('updated_at', $user);
+        $this->assertArrayNotHasKey('deleted_at', $user);
+
+        // La fila sí existe realmente en la BD (el INSERT se ejecutó igual).
+        $found = $this->userRepo->findById($user['id']);
+        $this->assertNotNull($found);
+        $this->assertEquals('No Reload', $found['name']);
+    }
+
+    public function testCreateWithReloadDefaultBehaviorUnchanged(): void
+    {
+        $data = ['name' => 'With Reload', 'email' => 'withreload@example.com'];
+
+        $user = $this->userRepo->create($data);
+
+        // El comportamiento por defecto sigue haciendo el SELECT posterior,
+        // por lo que el resultado incluye columnas generadas por la BD.
+        $this->assertArrayHasKey('created_at', $user);
+        $this->assertArrayHasKey('updated_at', $user);
+    }
 }
 
 // ── Test Repositories ───────────────────────────────────────────────────

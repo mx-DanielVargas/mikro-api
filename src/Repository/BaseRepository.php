@@ -169,7 +169,15 @@ abstract class BaseRepository implements RepositoryInterface
     /*  Escritura                                                           */
     /* ------------------------------------------------------------------ */
 
-    public function create(array $data): array
+    /**
+     * @param bool $reload  Si es true (por defecto), hace un SELECT adicional
+     *                       tras el INSERT para reflejar defaults/triggers de
+     *                       la BD (comportamiento histórico). Pasa `false` en
+     *                       paths de alto volumen donde no se necesiten esos
+     *                       valores generados por la BD, para evitar el
+     *                       round-trip extra (AUD-008).
+     */
+    public function create(array $data, bool $reload = true): array
     {
         $data    = $this->filterColumns($data);
         $columns = \implode('`, `', \array_keys($data));
@@ -181,6 +189,11 @@ abstract class BaseRepository implements RepositoryInterface
         $stmt->execute(\array_values($data));
 
         $id = $this->db->lastInsertId();
+
+        if (!$reload) {
+            return \array_merge([$this->primaryKey => $id], $data);
+        }
+
         return $this->findById($id) ?? \array_merge([$this->primaryKey => $id], $data);
     }
 
