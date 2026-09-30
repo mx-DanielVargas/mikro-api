@@ -201,3 +201,148 @@ mezclar cambios de otros agentes en curso). Un agente adicional detectó y
 corrigió un error propio (borrado accidental de un test preexistente en un
 `edit_file` intermedio) antes de confirmar su commit — ver detalle en
 AUD-009 arriba.
+
+---
+
+## Ronda 2 — Auditoría de segunda opinión sobre el código de la Ronda 1
+
+Tras cerrar la Ronda 1, se realizó una auditoría crítica adicional
+(2 sub-agentes en modo solo-lectura, con reproducción empírica de varios
+escenarios) específicamente sobre el código añadido en AUD-004 a AUD-010.
+Se encontraron **2 hallazgos críticos** que la Ronda 1 no detectó porque
+los tests solo cubrían el happy path, más varios de impacto alto/medio.
+Esta sección documenta esos hallazgos y su corrección.
+
+Leyenda: ✅ Corregido · ⬜ Pendiente (fuera de alcance de esta ronda, ver nota)
+
+### R2-01 — Race condition en `ApcuRateLimitStore::increment()`
+- **Estado:** ✅ Corregido
+- **Archivo:** `src/Middleware/ApcuRateLimitStore.php`
+- **Problema:** el patrón `apcu_fetch()` + modificar en PHP + `apcu_store()`
+  no es atómico. Bajo concurrencia real (el escenario exacto que motiva
+  usar este store), dos requests podían leer el mismo contador y
+  sobrescribirse, perdiendo incrementos y dejando pasar más tráfico del
+  límite configurado justo durante picos de abuso.
+- **Fix:** se separaron el contador y el timestamp de reset en dos claves
+  APCu distintas, usando `apcu_add()` (inicialización atómica de ventana)
+  y `apcu_inc()` (incremento atómico) en lugar de fetch+store.
+- **Commit:** `9a9d50e`
+
+### R2-02 — Escritura no atómica y sin manejo de errores en la caché de rutas
+- **Estado:** ✅ Corregido
+- **Archivo:** `src/Router.php`
+- **Problema:** `cacheTo()` escribía el archivo directo con
+  `file_put_contents()` (sin atomicidad); bajo múltiples workers
+  concurrentes tras un deploy, dos procesos podían truncar el archivo al
+  escribir simultáneamente. `loadFromCache()` hacía `require $path` sin
+  `try/catch`: un archivo corrupto lanzaba un `ParseError` **fuera** del
+  `try/catch` de `App::run()` (por ocurrir en el bootstrap, antes de
+  `run()`), tumbando el proceso completo en vez de degradar a 500.
+- **Fix:** `cacheTo()` ahora escribe a un archivo temporal y usa `rename()`
+  (atómico en POSIX); `loadFromCache()` envuelve el `require` en
+  `try/catch` y valida la estructura de cada ruta antes de confiar en el
+  archivo cacheado.
+- **Commit:** `677b727`
+
+### R2-03 — AUD-004 resuelto solo a medias: comportamiento por defecto sin advertencia
+- **Estado:** ✅ Corregido (documentación)
+- **Archivo:** `README.md`
+- **Problema:** el comportamiento por defecto de `RateLimitMiddleware`
+  (`InMemoryRateLimitStore`) sigue sin persistir de forma confiable entre
+  requests en PHP-FPM/Apache, pero el README no lo advertía junto al
+  ejemplo canónico, dando una falsa sensación de que AUD-004 quedaba
+  resuelto "out of the box".
+- **Fix:** se agregó una advertencia explícita en la sección "Built-in
+  Rate Limiting" del README, con el ejemplo de `ApcuRateLimitStore` justo
+  al lado del ejemplo simple.
+- **Commit:** `181edc9`
+
+### R2-04 — Inconsistencia de tipo del `id` entre `reload:true`/`reload:false`
+- **Estado:** ✅ Corregido
+- **Archivo:** `src/Repository/BaseRepository.php`
+- **Problema:** `PDO::lastInsertId()` siempre retorna `string`, pero el
+  `SELECT` posterior (con `reload:true`, default) devuelve tipos nativos
+  de columna (`int` con `EMULATE_PREPARES=false`). `create($data)` → `id`
+  `int`; `create($data, reload:false)` → `id` `string`. Contrato de tipo
+  inconsistente según un flag opcional.
+- **Fix:** se normaliza `lastInsertId()` a `int` cuando es puramente
+  numérico en la rama `reload:false`; de paso se invirtió el orden del
+  `array_merge` para que el id real nunca sea sobreescrito por una clave
+  homónima en `$data` (hallazgo cosmético relacionado, resuelto de paso).
+- **Commit:** `2e1485e`
+
+### R2-05 — "El primer repo gana": binding de `Database` incorrecto en el Container
+- **Estado:** ✅ Corregido (detección + advertencia, no bloqueante)
+- **Archivo:** `src/Repository/BaseRepository.php`
+- **Problema:** `setContainer()` comprobaba `!$container->has(Database::class)`,
+  no "¿es la misma instancia?". Si dos repos con conexiones `Database`
+  distintas comparten el mismo Container, el primero en resolverse "gana"
+  el binding, y repos relacionados del segundo podían usar la conexión
+  incorrecta silenciosamente.
+- **Fix:** `setContainer()` ahora compara la instancia existente contra
+  `$this->db`; si difieren, emite `E_USER_WARNING` en vez de sobreescribir
+  en silencio (no se bloquea la operación, para no romper casos de uso
+  legítimos donde el desarrollador sabe lo que hace, pero queda visible).
+- **Commit:** `6c53001`
+
+### R2-06 — Pérdida silenciosa de rutas si `cacheRoutes()` se llama después de `useController()`
+- **Estado:** ✅ Corregido
+- **Archivos:** `src/Router.php`, `src/App.php`
+- **Problema:** `loadFromCache()` no invalida por staleness (a diferencia
+  de la caché de vistas). Si `cacheRoutes()` se llamaba después de
+  `useController()` y el archivo de caché ya existía, sobrescribía
+  silenciosamente las rutas recién registradas por reflexión.
+- **Fix:** `App::cacheRoutes()` ahora lanza `LogicException` si
+  `$this->controllers` ya no está vacío (fuerza el orden correcto en vez
+  de fallar en silencio); se agregó `App::clearRouteCache()` para
+  invalidación manual explícita.
+- **Nota (⬜ pendiente, fuera de alcance de esta ronda):** no se
+  implementó invalidación automática por hash/mtime de los controladores
+  (análoga a la de la caché de vistas) — el desarrollador debe borrar el
+  archivo manualmente (o usar `clearRouteCache()`) tras cambios de rutas,
+  similar al modelo `route:cache` de otros frameworks.
+- **Commit:** `09590fe`
+
+### R2-07 — Marcadores de conflicto de merge sin resolver en `README.md`
+- **Estado:** ✅ Corregido
+- **Archivo:** `README.md`
+- **Problema:** 2 bloques con marcadores `<<<<<<<`/`=======`/`>>>>>>>`
+  comiteados literalmente (de la PR `feat/view-engine-and-fixes` vs
+  `master`), rompiendo el renderizado de Markdown en GitHub en las
+  secciones "Features" y "Template Engine"/"Configuration".
+- **Fix:** se eliminaron las 6 líneas de marcadores, preservando todo el
+  contenido real de ambos lados del conflicto.
+- **Commit:** `6e0cd45`
+
+### R2-08 — `cacheRoutes()`/`setCachePath()` sin documentar
+- **Estado:** ✅ Corregido
+- **Archivo:** `README.md`
+- **Fix:** nueva sección "Performance Caching" documentando ambas APIs
+  con ejemplos, advertencias de orden de llamada, invalidación manual y
+  ubicación recomendada del archivo de caché fuera del docroot público.
+- **Commit:** `5edaf94`
+
+### Hallazgos medios/bajos identificados en la Ronda 2 (⬜ pendientes, no incluidos en esta pasada)
+- Validación estructural más estricta no cubre absolutamente todos los
+  campos futuros si el formato de ruta cambia (mitigado, no eliminado).
+- Ventana de colisión de 1s en invalidación por `mtime` de la caché de
+  vistas (`View/Engine.php`) — limitación de resolución de `filemtime()`.
+- Acoplamiento de capas: `Container` importa `Repository\BaseRepository`
+  directamente; se sugirió una interfaz `ContainerAwareInterface` para
+  invertir la dependencia — no implementado en esta ronda.
+- `CHANGELOG.md` sigue congelado en `1.0.0 (2024-01-01)`, sin reflejar
+  ninguno de los cambios posteriores (Ronda 1 ni Ronda 2).
+- Cobertura de tests: `AppTest.php` sigue sin existir (limitación de
+  diseño documentada desde el inicio del proyecto).
+
+## Validación final (Ronda 2)
+
+```
+$ vendor/bin/phpunit
+OK, but incomplete, skipped, or risky tests!
+Tests: 224, Assertions: 385, Skipped: 3.
+```
+Los 3 *skipped* corresponden a `ApcuRateLimitStoreTest`, gateados por
+`extension_loaded('apcu')` (la extensión no está instalada en este
+entorno de desarrollo). `grep` de marcadores de conflicto en el repo
+completo retorna vacío.
