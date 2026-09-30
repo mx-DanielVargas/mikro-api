@@ -179,6 +179,12 @@ abstract class BaseRepository implements RepositoryInterface
      *                       paths de alto volumen donde no se necesiten esos
      *                       valores generados por la BD, para evitar el
      *                       round-trip extra (AUD-008).
+     *
+     *                       Nota de tipo: PDO::lastInsertId() siempre retorna
+     *                       string; con reload:false se normaliza a int cuando
+     *                       es puramente numérico, para igualar el tipo que
+     *                       devolvería un SELECT real y mantener un contrato
+     *                       consistente entre ambos modos (Ronda 2).
      */
     public function create(array $data, bool $reload = true): array
     {
@@ -194,10 +200,13 @@ abstract class BaseRepository implements RepositoryInterface
         $id = $this->db->lastInsertId();
 
         if (!$reload) {
-            return \array_merge([$this->primaryKey => $id], $data);
+            $normalizedId = \ctype_digit($id) ? (int) $id : $id;
+            // El id real se coloca DESPUÉS de $data en el merge para que nunca
+            // sea sobreescrito por una clave homónima que pudiera venir en $data.
+            return \array_merge($data, [$this->primaryKey => $normalizedId]);
         }
 
-        return $this->findById($id) ?? \array_merge([$this->primaryKey => $id], $data);
+        return $this->findById($id) ?? \array_merge($data, [$this->primaryKey => $id]);
     }
 
     public function update(mixed $id, array $data): ?array

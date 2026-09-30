@@ -281,7 +281,8 @@ class BaseRepositoryTest extends TestCase
         // El resultado debe ser exactamente el merge de id + datos originales,
         // sin campos que solo vendrían de un SELECT real (created_at, updated_at, deleted_at).
         $this->assertArrayHasKey('id', $user);
-        $this->assertEquals(\array_merge(['id' => $user['id']], $data), $user);
+        $this->assertIsInt($user['id']); // id numérico normalizado, no el string crudo de lastInsertId() (Ronda 2 #4)
+        $this->assertEquals(\array_merge($data, ['id' => $user['id']]), $user);
         $this->assertArrayNotHasKey('created_at', $user);
         $this->assertArrayNotHasKey('updated_at', $user);
         $this->assertArrayNotHasKey('deleted_at', $user);
@@ -302,6 +303,24 @@ class BaseRepositoryTest extends TestCase
         // por lo que el resultado incluye columnas generadas por la BD.
         $this->assertArrayHasKey('created_at', $user);
         $this->assertArrayHasKey('updated_at', $user);
+    }
+
+    public function testCreateIdTypeConsistentBetweenReloadModes(): void
+    {
+        $withReload = $this->userRepo->create([
+            'name' => 'Reload True',
+            'email' => 'reloadtrue@example.com',
+        ]);
+
+        $withoutReload = $this->userRepo->create([
+            'name' => 'Reload False',
+            'email' => 'reloadfalse@example.com',
+        ], reload: false);
+
+        // El tipo del id no debe depender del flag $reload (Ronda 2 #4).
+        $this->assertIsInt($withReload['id']);
+        $this->assertIsInt($withoutReload['id']);
+        $this->assertSame(\gettype($withReload['id']), \gettype($withoutReload['id']));
     }
 }
 
