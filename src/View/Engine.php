@@ -30,12 +30,52 @@ class Engine
         $this->globals[$key] = $value;
     }
 
+    private ?string $cachePath = null;
+
+    /**
+     * Habilita (o deshabilita con null) una caché en disco del PHP compilado
+     * de cada vista, invalidada automáticamente por el mtime del archivo
+     * fuente. Evita recompilar (parseo de @if/@foreach/etc.) en cada render
+     * cuando la plantilla no ha cambiado (AUD-007).
+     */
+    public function setCachePath(?string $path): void
+    {
+        $this->cachePath = $path !== null ? rtrim($path, '/') : null;
+    }
+
     public function render(string $view, array $data = []): string
     {
         $file = $this->resolve($view);
-        $compiled = $this->compile(file_get_contents($file));
+        $compiled = $this->getCompiled($file);
 
         return $this->evaluate($compiled, $data);
+    }
+
+    /**
+     * Retorna el PHP compilado para $file, usando la caché en disco si está
+     * habilitada y sigue vigente (mtime del cache >= mtime del origen).
+     */
+    private function getCompiled(string $file): string
+    {
+        if ($this->cachePath === null) {
+            return $this->compile(file_get_contents($file));
+        }
+
+        $cacheFile = $this->cachePath . '/' . md5($file) . '.php';
+        $sourceMtime = filemtime($file);
+
+        if (is_file($cacheFile) && filemtime($cacheFile) >= $sourceMtime) {
+            return file_get_contents($cacheFile);
+        }
+
+        $compiled = $this->compile(file_get_contents($file));
+
+        if (!is_dir($this->cachePath)) {
+            mkdir($this->cachePath, 0755, true);
+        }
+        file_put_contents($cacheFile, $compiled);
+
+        return $compiled;
     }
 
     private array $fallbackPaths = [];

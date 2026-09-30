@@ -93,4 +93,50 @@ class ViewEngineTest extends TestCase
         $this->assertEquals('two', $this->engine()->render('elseif', ['v' => 2]));
         $this->assertEquals('many', $this->engine()->render('elseif', ['v' => 99]));
     }
+
+    public function testCompiledCacheIsCreatedAndReused(): void
+    {
+        $cachePath = sys_get_temp_dir() . '/mikro_view_cache_' . uniqid();
+
+        $this->write('cached', 'Hello {{ $name }}!');
+
+        $engine = $this->engine();
+        $engine->setCachePath($cachePath);
+
+        $first = $engine->render('cached', ['name' => 'World']);
+        $cacheFiles = glob($cachePath . '/*.php');
+
+        $this->assertEquals('Hello World!', $first);
+        $this->assertCount(1, $cacheFiles);
+
+        $second = $engine->render('cached', ['name' => 'World']);
+        $this->assertEquals($first, $second);
+        $this->assertCount(1, glob($cachePath . '/*.php'));
+
+        array_map('unlink', glob($cachePath . '/*.php'));
+        @rmdir($cachePath);
+    }
+
+    public function testCompiledCacheInvalidatedByMtime(): void
+    {
+        $cachePath = sys_get_temp_dir() . '/mikro_view_cache_' . uniqid();
+
+        $this->write('cached2', 'Hello {{ $name }}!');
+
+        $engine = $this->engine();
+        $engine->setCachePath($cachePath);
+
+        $first = $engine->render('cached2', ['name' => 'World']);
+        $this->assertEquals('Hello World!', $first);
+
+        $viewFile = $this->viewsPath . '/cached2.php';
+        file_put_contents($viewFile, 'Bye {{ $name }}!');
+        touch($viewFile, time() + 10);
+
+        $second = $engine->render('cached2', ['name' => 'World']);
+        $this->assertEquals('Bye World!', $second);
+
+        array_map('unlink', glob($cachePath . '/*.php'));
+        @rmdir($cachePath);
+    }
 }
