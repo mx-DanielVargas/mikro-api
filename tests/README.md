@@ -64,13 +64,39 @@ Esta suite de tests cubre los componentes críticos del framework MikroAPI.
 - ✅ Transacciones (commit y rollback)
 - ✅ lastInsertId
 
+#### 7. **SwaggerGeneratorTest** - Generación del spec OpenAPI
+- ✅ Generación de spec básico a partir de controladores
+- ✅ Extracción de rutas, métodos HTTP y parámetros
+- ✅ Metadatos de `ApiDoc`/`ApiTag`
+- ✅ Guards reflejados como requisitos de seguridad
+
+#### 8. **DtoSchemaBuilderTest** - Esquema JSON Schema a partir de DTOs
+- ✅ Inferencia de tipos desde propiedades tipadas de PHP
+- ✅ Mapeo de atributos de validación (`Required`, `IsString`, `IsInt`, `IsEmail`, `MinLength`/`MaxLength`, `Min`/`Max`, `IsIn`, etc.)
+- ✅ Campos requeridos vs. opcionales
+
+#### 9. **ResponseTest / ResponseRenderTest** - Factories y renderizado de vistas
+- ✅ Factories `json`, `text`, `html`, `error`, `empty`, `redirect`
+- ✅ Modificadores fluent (`withHeader`, `withStatus`)
+- ✅ `Response::render()` delegando en el motor de vistas configurado
+
+#### 10. **ConfigServiceTest** - Carga y acceso a configuración
+- ✅ Parsing de `.env` (comentarios, líneas vacías, comillas, comentarios al final de línea)
+- ✅ Interpolación de variables (`${VAR}`)
+- ✅ Overrides por entorno (`.env.production`, etc.)
+- ✅ Accesores tipados (`getInt`, `getBool`, `getFloat`) y namespaces con dot-notation
+
+#### 11. **MigrationAlterTableTest** - Generación de ALTER TABLE
+- ✅ Detección de columnas nuevas vs. existentes
+- ✅ Generación de índices y constraints únicos vía `ALTER TABLE`
+- ✅ Timestamps automáticos
+- ✅ `Migration::up()` alternando entre `CREATE TABLE` y `ALTER TABLE` según el estado de la tabla
+
 ## 🚫 Componentes NO Testeados (Bajo Valor)
 
 Los siguientes componentes no tienen tests porque:
 
-- **Response**: Factories simples sin lógica compleja
 - **App**: Orquestación que requiere mocks complejos del entorno HTTP
-- **BaseService**: Solo helpers para lanzar excepciones
 - **Attributes**: Clases de metadatos sin lógica ejecutable
 - **MigrationRunner**: Integración con filesystem, mejor testear manualmente
 - **SwaggerUI**: Renderizado HTML, difícil de testear unitariamente
@@ -105,7 +131,7 @@ composer test
 
 ## ✅ Estado Actual
 
-**88 tests, 152 assertions - Todos pasando ✓**
+**88 tests, 152 assertions - Todos pasando ✓** (número exacto pendiente de actualizar tras la ronda de fixes de la auditoría en curso)
 
 ## 📊 Coverage Esperado
 
@@ -193,9 +219,7 @@ Si un test falla:
 
 Tests adicionales que podrían agregarse (prioridad media):
 
-- [ ] SchemaBuilderTest - Generación de DDL
 - [ ] RelationLoaderTest - Carga de relaciones N+1
-- [ ] SwaggerGeneratorTest - Generación de OpenAPI spec
 - [ ] Integration tests - Tests end-to-end
 
 ## 📚 Recursos
