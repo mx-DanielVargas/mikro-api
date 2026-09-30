@@ -175,6 +175,59 @@ class ContainerTest extends TestCase
         $this->assertCount(1, $result[0]['related']);
         $this->assertEquals(1, $result[0]['related'][0]['dummy_id']);
     }
+    public function testSetContainerWarnsWhenDatabaseInstanceDiffersFromRegistered(): void
+    {
+        Database::reset();
+        $dbA = Database::connect(['driver' => 'sqlite', 'database' => ':memory:']);
+
+        Database::reset();
+        $dbB = Database::connect(['driver' => 'sqlite', 'database' => ':memory:']);
+
+        $this->assertNotSame($dbA, $dbB);
+
+        $repoA = new ContainerDummyRepository($dbA);
+        $repoB = new ContainerDummyRepository($dbB);
+
+        // El primer repo registra su Database sin advertencia.
+        $repoA->setContainer($this->container);
+        $this->assertSame($dbA, $this->container->get(Database::class));
+
+        // El segundo repo comparte el mismo Container pero tiene una
+        // Database DISTINTA ya vinculada: debe advertir, no sobreescribir
+        // en silencio (Ronda 2 #5).
+        $this->expectWarning();
+        $this->expectWarningMessage(
+            ContainerDummyRepository::class . ' fue resuelto con una instancia de Database '
+            . 'distinta a la ya registrada en el Container.'
+        );
+
+        $repoB->setContainer($this->container);
+    }
+
+    public function testSetContainerDoesNotWarnWhenSameDatabaseInstanceIsReused(): void
+    {
+        Database::reset();
+        $db = Database::connect(['driver' => 'sqlite', 'database' => ':memory:']);
+
+        $repoA = new ContainerDummyRepository($db);
+        $repoB = new ContainerDummyRepository($db);
+
+        \set_error_handler(function (int $errno, string $errstr) {
+            $this->fail('No deberia emitirse ningun warning cuando la Database es la misma instancia: ' . $errstr);
+        });
+
+        try {
+            $repoA->setContainer($this->container);
+            $repoB->setContainer($this->container);
+        } finally {
+            // restore_error_handler() en vez de set_error_handler($previousHandler):
+            // este último crea una entrada adicional en la pila interna de PHP y
+            // puede dejar el closure de este test filtrándose a tests posteriores.
+            \restore_error_handler();
+        }
+
+        $this->assertSame($db, $this->container->get(Database::class));
+    }
 }
 
 // ── Fixtures para AUD-009 (Container + BaseRepository + RelationLoader) ──

@@ -301,13 +301,34 @@ abstract class BaseRepository implements RepositoryInterface
      * resuelva repositorios relacionados con dependencias adicionales más
      * allá de Database (AUD-009). Se llama automáticamente cuando el
      * repositorio se resuelve vía Container::get()/make().
+     *
+     * Si el Container ya tiene una instancia de Database DISTINTA a la de
+     * este repositorio registrada (ej. dos repos con conexiones distintas
+     * comparten el mismo Container), se emite un E_USER_WARNING en vez de
+     * sobreescribir silenciosamente — los repos relacionados resueltos vía
+     * Container después de este punto podrían usar la conexión incorrecta
+     * si dependen del binding compartido (Ronda 2).
      */
     public function setContainer(Container $container): static
     {
         $this->container = $container;
-        if (!$container->has(Database::class)) {
+
+        $existing = $container->has(Database::class) ? $container->get(Database::class) : null;
+
+        if ($existing === null) {
             $container->instance(Database::class, $this->db);
+        } elseif ($existing !== $this->db) {
+            \trigger_error(
+                static::class . ' fue resuelto con una instancia de Database '
+                . 'distinta a la ya registrada en el Container. Los '
+                . 'repositorios relacionados cargados vía with()/loadWith() '
+                . 'desde esta instancia podrían usar la conexión incorrecta '
+                . 'si el Container se comparte entre múltiples conexiones '
+                . 'Database.',
+                E_USER_WARNING
+            );
         }
+
         return $this;
     }
 
