@@ -601,6 +601,36 @@ public function index(Request $req): Response
 | `@section('name')` / `@endsection` | Define a section |
 | `@yield('name')` | Render a section in layout |
 
+## Performance Caching
+
+MikroAPI offers opt-in caching for two of its more reflection-heavy paths: route registration and template compilation. Both are disabled by default (zero behavior change) and safe to enable only in production.
+
+### Route Caching
+
+```php
+$app = new App();
+$app->cacheRoutes(__DIR__ . '/cache/routes.php')  // must be called BEFORE useController()
+    ->useController(UserController::class, PostController::class)
+    ->run();
+```
+
+On first run, the compiled route table is written to the given file. Subsequent requests load routes from that file instead of re-reflecting every controller class.
+
+> ⚠️ `cacheRoutes()` must be called **before** any `useController()` call, or it will throw a `LogicException` (calling it after could otherwise silently drop routes registered in the same request if a stale cache file already exists).
+>
+> ⚠️ The cache is **not** automatically invalidated when controllers/routes change. After adding, removing, or modifying routes, delete the cache file (or call `$app->clearRouteCache($path)`) so it regenerates.
+>
+> ⚠️ Store the cache file outside your public docroot — it contains internal controller class names and route patterns.
+
+### Template Compilation Caching
+
+```php
+$app->useViews(__DIR__ . '/views');
+Response::getViewEngine()->setCachePath(__DIR__ . '/cache/views');
+```
+
+When enabled, compiled view output is cached on disk and automatically invalidated by comparing the source template's modification time — no manual cache-clearing needed for views.
+
 ## Configuration
 
 MikroAPI includes a configuration service inspired by `@nestjs/config` for managing environment variables.
