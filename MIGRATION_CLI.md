@@ -246,6 +246,24 @@ If `vendor/bin/mikro-migrate` is not found:
 2. Check that `vendor/bin/` exists
 3. Try using the full path: `./vendor/bin/mikro-migrate`
 
+### `Class "App\Controllers\..." does not exist` (ReflectionException)
+
+This means Composer's autoloader doesn't know how to map the `App\` namespace to `src/`. It happens when `composer.json` already existed **before** running `init` (e.g. you ran `composer require mikro-api/mikro-api` first) — `init` merges the missing `autoload.psr-4`/`require` entries into it automatically, but Composer's autoloader files under `vendor/composer/` are only regenerated when you run `composer install`/`composer update`/`composer dump-autoload`, not just by editing `composer.json`. Fix:
+
+```bash
+composer dump-autoload
+```
+
+Then confirm `composer.json` has:
+```json
+"autoload": {
+    "psr-4": {
+        "App\\": "src/"
+    }
+}
+```
+and that the class file exists at the expected path (`src/Controllers/HomeController.php` for `App\Controllers\HomeController`) with a matching `namespace`/class name.
+
 ### Generated file already exists
 
 `make:controller`, `make:repository`, `make:dto`, `make:middleware`,

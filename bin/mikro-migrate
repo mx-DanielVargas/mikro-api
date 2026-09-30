@@ -746,7 +746,7 @@ GITIGNORE);
 }
 JSON);
     } else {
-        echo "  - skipped (composer.json already exists): make sure it has \"App\\\\\": \"src/\" under autoload.psr-4, and requires mikro-api/mikro-api\n";
+        mergeComposerJson($composerPath);
     }
 
     // ── README.md ────────────────────────────────────────────────────────
@@ -815,4 +815,61 @@ function hasAnyMigration(string $root): bool
 {
     $dir = $root . '/database/migrations';
     return is_dir($dir) && count(glob($dir . '/*.php') ?: []) > 0;
+}
+
+/**
+ * If composer.json already exists (e.g. `composer require mikro-api/mikro-api`
+ * was run before `init`), merges in the autoload.psr-4 "App\\": "src/" entry
+ * and the mikro-api/mikro-api requirement whenever either is missing, instead
+ * of silently skipping the file. Without this, a project whose composer.json
+ * predates `init` would never gain the PSR-4 mapping needed to autoload
+ * anything under src/ — causing a confusing "Class ... does not exist"
+ * ReflectionException the first time useController() runs.
+ */
+function mergeComposerJson(string $path): void
+{
+    $raw  = file_get_contents($path);
+    $data = json_decode($raw, true);
+
+    if (!is_array($data)) {
+        echo "  - WARNING: composer.json exists but could not be parsed as JSON, skipped merging autoload config.\n";
+        echo "    Make sure it has \"App\\\\\": \"src/\" under autoload.psr-4, and requires mikro-api/mikro-api.\n";
+        return;
+    }
+
+    $changed = false;
+
+    if (!isset($data['autoload']['psr-4']) || !is_array($data['autoload']['psr-4'])) {
+        $data['autoload']['psr-4'] = [];
+    }
+
+    $hasSrcMapping = false;
+    foreach ($data['autoload']['psr-4'] as $mappedPath) {
+        if (in_array(rtrim((string) $mappedPath, '/'), ['src', './src'], true)) {
+            $hasSrcMapping = true;
+            break;
+        }
+    }
+
+    if (!$hasSrcMapping) {
+        $data['autoload']['psr-4']['App\\'] = 'src/';
+        $changed = true;
+    }
+
+    if (!isset($data['require']) || !is_array($data['require'])) {
+        $data['require'] = [];
+    }
+    if (!isset($data['require']['mikro-api/mikro-api'])) {
+        $data['require']['mikro-api/mikro-api'] = '^1.0';
+        $changed = true;
+    }
+
+    if (!$changed) {
+        echo "  - composer.json already exists and already has the required autoload/require entries, left untouched: composer.json\n";
+        return;
+    }
+
+    $encoded = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n";
+    file_put_contents($path, $encoded);
+    echo "  - updated: composer.json (added missing autoload.psr-4/require entries — run `composer dump-autoload` next)\n";
 }
