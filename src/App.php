@@ -95,22 +95,24 @@ class App
     ): self {
         $toDocument = empty($controllers) ? $this->controllers : $controllers;
 
-        $generator = new SwaggerGenerator();
+        $specFactory = function () use ($toDocument, $excludeControllers, $config, $authGuards): array {
+            $generator = new SwaggerGenerator();
 
-        if (!empty($authGuards)) {
-            $generator->setAuthGuards($authGuards);
-        }
+            if (!empty($authGuards)) {
+                $generator->setAuthGuards($authGuards);
+            }
 
-        $spec = $generator->generate(
-            controllers:         $toDocument,
-            excludeControllers:  $excludeControllers,
-            config:              $config,
-        );
+            return $generator->generate(
+                controllers:         $toDocument,
+                excludeControllers:  $excludeControllers,
+                config:              $config,
+            );
+        };
 
         $this->swaggerUI = new SwaggerUI(
-            spec:     $spec,
-            uiPath:   $path,
-            jsonPath: $jsonPath,
+            specFactory: $specFactory,
+            uiPath:      $path,
+            jsonPath:    $jsonPath,
         );
 
         return $this;

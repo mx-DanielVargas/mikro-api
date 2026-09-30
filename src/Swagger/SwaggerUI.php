@@ -7,13 +7,19 @@ use MikroApi\Response;
 /**
  * Sirve la interfaz Swagger UI y el endpoint del spec JSON.
  * Usa Swagger UI desde CDN — no requiere instalación.
+ *
+ * El spec se genera de forma diferida (solo cuando se accede a /docs o
+ * /docs/json) y se memoiza, para no penalizar el resto de requests con
+ * el costo de reflexión de generar el spec completo (AUD-003).
  */
 class SwaggerUI
 {
+    private ?array $spec = null;
+
     public function __construct(
-        private array  $spec,
-        private string $uiPath,   // ej: /docs
-        private string $jsonPath, // ej: /docs/json
+        private \Closure $specFactory,
+        private string   $uiPath,   // ej: /docs
+        private string   $jsonPath, // ej: /docs/json
     ) {}
 
     public function matches(string $path): bool
@@ -23,24 +29,33 @@ class SwaggerUI
 
     public function handle(string $path): Response
     {
+        $spec = $this->getSpec();
+
         if ($path === $this->jsonPath) {
-            return $this->serveJson();
+            return $this->serveJson($spec);
         }
-        return $this->serveHtml();
+        return $this->serveHtml($spec);
     }
 
-    private function serveJson(): Response
+    private function getSpec(): array
     {
-        $json = \json_encode($this->spec, \JSON_PRETTY_PRINT | \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE);
-        return Response::json($this->spec)
+        if ($this->spec === null) {
+            $this->spec = ($this->specFactory)();
+        }
+        return $this->spec;
+    }
+
+    private function serveJson(array $spec): Response
+    {
+        return Response::json($spec)
             ->withHeader('Access-Control-Allow-Origin', '*');
     }
 
-    private function serveHtml(): Response
+    private function serveHtml(array $spec): Response
     {
         $jsonUrl = $this->jsonPath;
-        $title   = \htmlspecialchars($this->spec['info']['title'] ?? 'API Docs');
-        $version = \htmlspecialchars($this->spec['info']['version'] ?? '');
+        $title   = \htmlspecialchars($spec['info']['title'] ?? 'API Docs');
+        $version = \htmlspecialchars($spec['info']['version'] ?? '');
 
         $html = <<<HTML
 <!DOCTYPE html>
