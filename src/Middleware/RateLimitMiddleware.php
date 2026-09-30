@@ -6,34 +6,36 @@ use MikroApi\Request;
 use MikroApi\Response;
 
 /**
- * Simple in-memory rate limiter per IP.
- * For production, replace the storage with Redis/APCu.
+ * Rate limiter por IP con almacenamiento intercambiable (RateLimitStore).
+ *
+ * Por defecto usa InMemoryRateLimitStore (memoria de proceso), que NO
+ * persiste de forma confiable entre requests en despliegues PHP-FPM/Apache
+ * sin proceso persistente (ver AUD-004). Para producción con múltiples
+ * workers/servidores, pasa un store persistente:
+ *
+ *   new RateLimitMiddleware(60, 60, new ApcuRateLimitStore());
  */
 class RateLimitMiddleware implements MiddlewareInterface
 {
-    /** @var array<string, array{count: int, reset: int}> */
-    private static array $store = [];
+    private RateLimitStore $store;
 
     public function __construct(
         private int $maxRequests = 60,
         private int $windowSeconds = 60,
-    ) {}
+        ?RateLimitStore $store = null,
+    ) {
+        $this->store = $store ?? new InMemoryRateLimitStore();
+    }
 
     public function handle(Request $request, callable $next): Response
     {
-        $ip  = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
-        $now = time();
+        $ip    = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+        $state = $this->store->increment($ip, $this->windowSeconds);
+        $remaining = \max(0, $this->maxRequests - $state['count']);
 
-        if (!isset(self::$store[$ip]) || self::$store[$ip]['reset'] <= $now) {
-            self::$store[$ip] = ['count' => 0, 'reset' => $now + $this->windowSeconds];
-        }
-
-        self::$store[$ip]['count']++;
-        $remaining = max(0, $this->maxRequests - self::$store[$ip]['count']);
-
-        if (self::$store[$ip]['count'] > $this->maxRequests) {
+        if ($state['count'] > $this->maxRequests) {
             return Response::json(['error' => 'Too Many Requests'], 429)
-                ->withHeader('Retry-After', (string)(self::$store[$ip]['reset'] - $now))
+                ->withHeader('Retry-After', (string)($state['reset'] - \time()))
                 ->withHeader('X-RateLimit-Limit', (string)$this->maxRequests)
                 ->withHeader('X-RateLimit-Remaining', '0');
         }
