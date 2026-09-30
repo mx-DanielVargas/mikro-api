@@ -117,7 +117,7 @@ class ViewEngineTest extends TestCase
         @rmdir($cachePath);
     }
 
-    public function testCompiledCacheInvalidatedByMtime(): void
+    public function testCompiledCacheInvalidatedWhenSourceContentChanges(): void
     {
         $cachePath = sys_get_temp_dir() . '/mikro_view_cache_' . uniqid();
 
@@ -135,6 +135,36 @@ class ViewEngineTest extends TestCase
 
         $second = $engine->render('cached2', ['name' => 'World']);
         $this->assertEquals('Bye World!', $second);
+
+        array_map('unlink', glob($cachePath . '/*.php'));
+        @rmdir($cachePath);
+    }
+
+    public function testCompiledCacheNotInvalidatedByMtimeAloneWithoutContentChange(): void
+    {
+        $cachePath = sys_get_temp_dir() . '/mikro_view_cache_' . uniqid();
+
+        $this->write('cached3', 'Hello {{ $name }}!');
+
+        $engine = $this->engine();
+        $engine->setCachePath($cachePath);
+
+        $first = $engine->render('cached3', ['name' => 'World']);
+        $this->assertEquals('Hello World!', $first);
+
+        $cacheFiles = glob($cachePath . '/*.php');
+        $this->assertCount(1, $cacheFiles);
+        $cacheFile = $cacheFiles[0];
+        $cacheContentBefore = file_get_contents($cacheFile);
+
+        $viewFile = $this->viewsPath . '/cached3.php';
+        touch($viewFile, time() + 100);
+
+        $second = $engine->render('cached3', ['name' => 'World']);
+        $this->assertEquals($first, $second);
+
+        $cacheContentAfter = file_get_contents($cacheFile);
+        $this->assertEquals($cacheContentBefore, $cacheContentAfter);
 
         array_map('unlink', glob($cachePath . '/*.php'));
         @rmdir($cachePath);

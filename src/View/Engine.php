@@ -34,9 +34,11 @@ class Engine
 
     /**
      * Habilita (o deshabilita con null) una caché en disco del PHP compilado
-     * de cada vista, invalidada automáticamente por el mtime del archivo
-     * fuente. Evita recompilar (parseo de @if/@foreach/etc.) en cada render
-     * cuando la plantilla no ha cambiado (AUD-007).
+     * de cada vista, invalidada automáticamente comparando un hash del
+     * contenido fuente (no por mtime, para evitar colisiones si el archivo
+     * se edita y el caché se regenera dentro de la misma ventana de 1s).
+     * Evita recompilar (parseo de @if/@foreach/etc.) en cada render cuando
+     * la plantilla no ha cambiado.
      */
     public function setCachePath(?string $path): void
     {
@@ -53,27 +55,36 @@ class Engine
 
     /**
      * Retorna el PHP compilado para $file, usando la caché en disco si está
-     * habilitada y sigue vigente (mtime del cache >= mtime del origen).
+     * habilitada y sigue vigente. La vigencia se determina comparando un hash
+     * del contenido fuente actual contra el hash embebido en el archivo
+     * cacheado (no por mtime, que tiene una ventana de colisión de 1 segundo
+     * si el archivo se edita y el caché se regenera dentro del mismo segundo).
      */
     private function getCompiled(string $file): string
     {
+        $source = file_get_contents($file);
+
         if ($this->cachePath === null) {
-            return $this->compile(file_get_contents($file));
+            return $this->compile($source);
         }
 
-        $cacheFile = $this->cachePath . '/' . md5($file) . '.php';
-        $sourceMtime = filemtime($file);
+        $cacheFile   = $this->cachePath . '/' . md5($file) . '.php';
+        $sourceHash  = md5($source);
+        $marker      = "<?php /* src-hash:{$sourceHash} */ ?>\n";
 
-        if (is_file($cacheFile) && filemtime($cacheFile) >= $sourceMtime) {
-            return file_get_contents($cacheFile);
+        if (is_file($cacheFile)) {
+            $cached = file_get_contents($cacheFile);
+            if (str_starts_with($cached, $marker)) {
+                return substr($cached, strlen($marker));
+            }
         }
 
-        $compiled = $this->compile(file_get_contents($file));
+        $compiled = $this->compile($source);
 
         if (!is_dir($this->cachePath)) {
             mkdir($this->cachePath, 0755, true);
         }
-        file_put_contents($cacheFile, $compiled);
+        file_put_contents($cacheFile, $marker . $compiled);
 
         return $compiled;
     }
