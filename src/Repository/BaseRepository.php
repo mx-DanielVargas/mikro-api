@@ -4,6 +4,7 @@
 namespace MikroApi\Repository;
 
 use MikroApi\Container;
+use MikroApi\ContainerAwareInterface;
 use MikroApi\Database\Database;
 
 /**
@@ -31,7 +32,7 @@ use MikroApi\Database\Database;
  *   $repo->with('posts', 'profile')->findById(1);
  *   $repo->with('posts.comments')->findAll();  // relaciones anidadas
  */
-abstract class BaseRepository implements RepositoryInterface
+abstract class BaseRepository implements RepositoryInterface, ContainerAwareInterface
 {
     protected Database $db;
     protected string   $table;
