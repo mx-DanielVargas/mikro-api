@@ -745,12 +745,15 @@ In development, full error messages are returned. In production, only `"Internal
 
 ## Examples
 
-Check the `examples/` directory for complete working examples:
+Check the [`examples/`](./examples) directory for complete, runnable working examples:
 
-- `examples/basic/` - Simple API with CRUD operations
-- `examples/auth/` - JWT Authentication implementation
-- `examples/swagger/` - Complete Swagger/OpenAPI documentation example
-- `examples/views/` - Template engine with layouts and partials
+- [`examples/basic/`](./examples/basic) - Minimal routing, the smallest possible app
+- [`examples/auth/`](./examples/auth) - JWT Authentication implementation
+- [`examples/swagger/`](./examples/swagger) - Complete Swagger/OpenAPI documentation example
+- [`examples/crud-api/`](./examples/crud-api) - Repository pattern, migrations, relations, soft deletes, pagination & transactions ("mini blog" API)
+- [`examples/middleware/`](./examples/middleware) - Full middleware pipeline: CORS, rate limiting, JSON body validation, custom middleware
+- [`examples/templates/`](./examples/templates) - Template engine with layouts, sections, includes, directives & compiled caching
+- [`examples/config-and-caching/`](./examples/config-and-caching) - `ConfigService` (.env) and route caching for production setups
 
 ## License
 
