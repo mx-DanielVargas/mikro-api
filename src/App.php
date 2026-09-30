@@ -127,19 +127,49 @@ class App
 
     /**
      * Habilita caché de rutas compiladas. Si el archivo indicado existe y es
-     * válido, las rutas se cargan desde ahí (evitando reflexión). Si no existe
-     * o está corrupto, se generará automáticamente al llamar a run() (después
-     * de que todos los useController() ya se hayan registrado) (AUD-006).
+     * válido, las rutas se cargan desde ahí (evitando reflexión). Si no existe,
+     * está corrupto, o tiene una estructura inesperada, se generará
+     * automáticamente al llamar a run() (después de que todos los
+     * useController() ya se hayan registrado).
+     *
+     * IMPORTANTE: debe llamarse ANTES de cualquier useController(), o se
+     * lanzará una excepción — llamarlo después podría descartar silenciosamente
+     * rutas ya registradas si el archivo de caché ya existe pero está
+     * desactualizado (Ronda 2, hallazgo crítico).
      *
      * Uso:
      *   $app->cacheRoutes(__DIR__ . '/cache/routes.php')
      *       ->useController(UserController::class, PostController::class)
      *       ->run();
+     *
+     * Para invalidar manualmente el caché (ej. tras agregar/quitar rutas),
+     * borra el archivo o usa App::clearRouteCache().
      */
     public function cacheRoutes(string $cacheFile): self
     {
+        if (!empty($this->controllers)) {
+            throw new \LogicException(
+                'App::cacheRoutes() debe llamarse antes de useController(); '
+                . 'llamarlo después puede descartar silenciosamente rutas ya '
+                . 'registradas si el archivo de caché ya existe.'
+            );
+        }
+
         if (!$this->router->loadFromCache($cacheFile)) {
             $this->pendingRouteCacheFile = $cacheFile;
+        }
+        return $this;
+    }
+
+    /**
+     * Elimina el archivo de caché de rutas si existe. Útil para forzar la
+     * regeneración tras agregar/quitar controladores o rutas, ya que
+     * loadFromCache() no invalida automáticamente por staleness.
+     */
+    public function clearRouteCache(string $cacheFile): self
+    {
+        if (\is_file($cacheFile)) {
+            \unlink($cacheFile);
         }
         return $this;
     }

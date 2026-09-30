@@ -2,6 +2,7 @@
 
 namespace MikroApi\Tests;
 
+use MikroApi\App;
 use MikroApi\Router;
 use MikroApi\Request;
 use MikroApi\Response;
@@ -105,6 +106,28 @@ class RouterCacheTest extends TestCase
         $this->assertSame([], $residualTmpFiles);
     }
 
+    public function testCacheRoutesThrowsIfCalledAfterUseController(): void
+    {
+        $this->cacheFile = $this->makeTempCacheFile();
+
+        $app = new App();
+        $app->useController(NoopController::class);
+
+        $this->expectException(\LogicException::class);
+        $app->cacheRoutes($this->cacheFile);
+    }
+
+    public function testCacheRoutesWorksBeforeUseController(): void
+    {
+        $this->cacheFile = $this->makeTempCacheFile();
+
+        $app    = new App();
+        $result = $app->cacheRoutes($this->cacheFile)
+            ->useController(NoopController::class);
+
+        $this->assertInstanceOf(App::class, $result);
+    }
+
     private function makeTempCacheFile(): string
     {
         return \sys_get_temp_dir() . '/mikroapi_test_routes_' . \uniqid() . '.php';
@@ -129,6 +152,10 @@ class CacheableController
     {
         return Response::json(['name' => $request->params['name']]);
     }
+}
+
+class NoopController
+{
 }
 
 
