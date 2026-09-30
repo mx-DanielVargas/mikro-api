@@ -15,10 +15,7 @@
 - Attribute-Driven Migrations
 - Zero External Dependencies
 - Environment Configuration (.env) with Typed Accessors
-<<<<<<< feat/view-engine-and-fixes
 - Template Engine with Layouts, Sections & Includes
-=======
->>>>>>> master
 - Swagger Documentation with Query Parameters
 - Soft Deletes Support
 
@@ -543,7 +540,6 @@ $db->transaction(function () use ($userRepo, $orderRepo, $data) {
 
 Automatically rolls back on exception and re-throws.
 
-<<<<<<< feat/view-engine-and-fixes
 ## Template Engine
 
 MikroAPI includes a built-in template engine with Blade-like syntax.
@@ -605,8 +601,6 @@ public function index(Request $req): Response
 | `@section('name')` / `@endsection` | Define a section |
 | `@yield('name')` | Render a section in layout |
 
-=======
->>>>>>> master
 ## Configuration
 
 MikroAPI includes a configuration service inspired by `@nestjs/config` for managing environment variables.
