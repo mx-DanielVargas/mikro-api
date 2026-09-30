@@ -637,7 +637,7 @@ $app->useViews(__DIR__ . '/views');
 Response::getViewEngine()->setCachePath(__DIR__ . '/cache/views');
 ```
 
-When enabled, compiled view output is cached on disk and automatically invalidated by comparing the source template's modification time — no manual cache-clearing needed for views.
+When enabled, compiled view output is cached on disk and automatically invalidated by comparing a hash of the source template's content — no manual cache-clearing needed for views, and no risk of serving stale content due to filesystem mtime resolution.
 
 ## Configuration
 
