@@ -127,14 +127,16 @@ class App
         try {
             $request = Request::capture();
 
-            // Interceptar rutas de documentación antes del pipeline
-            if ($this->swaggerUI !== null && $this->swaggerUI->matches($request->path)) {
-                $this->swaggerUI->handle($request->path)->send();
-                return;
-            }
-
-            // Construir pipeline: middlewares → router dispatch
-            $core = fn(Request $req): Response => $this->router->dispatch($req);
+            // Construir pipeline: middlewares → (docs | router dispatch)
+            // El chequeo de rutas de documentación vive dentro del pipeline
+            // para que CORS, rate limiting, etc. también se apliquen a /docs
+            // y /docs/json (AUD-005).
+            $core = function (Request $req): Response {
+                if ($this->swaggerUI !== null && $this->swaggerUI->matches($req->path)) {
+                    return $this->swaggerUI->handle($req->path);
+                }
+                return $this->router->dispatch($req);
+            };
 
             $pipeline = array_reduce(
                 array_reverse($this->middlewares),
