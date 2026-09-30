@@ -147,10 +147,30 @@ class App
         } catch (\MikroApi\Service\ServiceException $e) {
             Response::error($e->getMessage(), $e->getStatusCode())->send();
         } catch (\Throwable $e) {
-            $message = ($_SERVER['APP_ENV'] ?? '') === 'production'
+            $message = $this->isProduction()
                 ? 'Internal Server Error'
                 : $e->getMessage();
             Response::error($message, 500)->send();
         }
+    }
+
+    /**
+     * Determina si el entorno actual es de producción.
+     *
+     * ConfigService::loadEnvFile() escribe APP_ENV en $_ENV y putenv(),
+     * nunca en $_SERVER, así que hay que revisar las tres fuentes para
+     * no filtrar mensajes de error internos cuando APP_ENV se define
+     * únicamente vía .env (AUD-001).
+     */
+    private function isProduction(): bool
+    {
+        $env = $_ENV['APP_ENV'] ?? $_SERVER['APP_ENV'] ?? null;
+
+        if ($env === null) {
+            $fromGetenv = getenv('APP_ENV');
+            $env = $fromGetenv !== false ? $fromGetenv : null;
+        }
+
+        return $env === 'production';
     }
 }
