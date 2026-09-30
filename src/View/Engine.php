@@ -127,6 +127,13 @@ class Engine
 
         extract($data, EXTR_SKIP);
 
+        // Se inicializan explícitamente para que el analizador estático no las
+        // marque como indefinidas; eval() puede sobreescribirlas si la plantilla
+        // usa @extends()/@section() (AUD-010). isset($__layout) preserva su
+        // semántica exacta ya que isset() sobre null retorna false.
+        $__layout = null;
+        $__sections = $__sections ?? [];
+
         ob_start();
         eval('?>' . $compiled);
         $content = ob_get_clean();
