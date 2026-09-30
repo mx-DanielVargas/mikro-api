@@ -219,6 +219,14 @@ $app->useMiddleware(new RateLimitMiddleware(
 
 Adds `X-RateLimit-Limit` and `X-RateLimit-Remaining` headers. Returns `429 Too Many Requests` with `Retry-After` when exceeded.
 
+> ⚠️ By default, `RateLimitMiddleware` stores counters in process memory (`InMemoryRateLimitStore`), which does **not** reliably persist across requests in PHP-FPM/Apache deployments without a persistent process — each request may be handled by a different worker/process. For production deployments with multiple workers or servers, pass a persistent store instead:
+>
+> ```php
+> $app->useMiddleware(new RateLimitMiddleware(60, 60, new ApcuRateLimitStore()));
+> ```
+>
+> `ApcuRateLimitStore` requires the `apcu` PHP extension. You can also implement `RateLimitStore` yourself to back it with Redis or another shared cache.
+
 ### JSON Body Validation
 
 ```php
