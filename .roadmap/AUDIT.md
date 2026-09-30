@@ -322,27 +322,27 @@ Leyenda: ✅ Corregido · ⬜ Pendiente (fuera de alcance de esta ronda, ver not
   ubicación recomendada del archivo de caché fuera del docroot público.
 - **Commit:** `5edaf94`
 
-### Hallazgos medios/bajos identificados en la Ronda 2 (⬜ pendientes, no incluidos en esta pasada)
-- Validación estructural más estricta no cubre absolutamente todos los
-  campos futuros si el formato de ruta cambia (mitigado, no eliminado).
-- Ventana de colisión de 1s en invalidación por `mtime` de la caché de
-  vistas (`View/Engine.php`) — limitación de resolución de `filemtime()`.
-- Acoplamiento de capas: `Container` importa `Repository\BaseRepository`
-  directamente; se sugirió una interfaz `ContainerAwareInterface` para
-  invertir la dependencia — no implementado en esta ronda.
-- `CHANGELOG.md` sigue congelado en `1.0.0 (2024-01-01)`, sin reflejar
-  ninguno de los cambios posteriores (Ronda 1 ni Ronda 2).
-- Cobertura de tests: `AppTest.php` sigue sin existir (limitación de
-  diseño documentada desde el inicio del proyecto).
+### Hallazgos medios/bajos identificados en la Ronda 2 (✅ todos corregidos)
+- **Ventana de colisión de 1s en invalidación por `mtime` de la caché de vistas** — ✅ Corregido. `Engine::getCompiled()` ahora invalida por hash MD5 del contenido fuente (embebido como marcador en el archivo cacheado) en vez de comparar `filemtime()`, eliminando la dependencia de la resolución de 1s del sistema de archivos. Commit `703b491`.
+- **Acoplamiento de capas: `Container` importaba `Repository\BaseRepository` directamente** — ✅ Corregido. Se introdujo `src/ContainerAwareInterface.php` (namespace raíz `MikroApi`); `Container::autowire()` ahora comprueba `instanceof ContainerAwareInterface` en vez de `instanceof BaseRepository`, y `BaseRepository` implementa esa interfaz genérica. Cualquier clase futura (Service, Controller) puede optar al mismo mecanismo sin acoplar `Container` a una capa específica. Commit `a24ca49`.
+- **`CHANGELOG.md` congelado en `1.0.0 (2024-01-01)`** — ✅ Corregido. Se agregó la sección `## [Unreleased]` (Added/Fixed/Changed) documentando ConfigService, rutas repetibles, y los 22 hallazgos de las 2 rondas de auditoría, verificado línea por línea contra el código/historial real (no copiado a ciegas de un borrador). Commit `14e07a1`.
+- **`AppTest.php` sigue sin existir** — ✅ Corregido (parcialmente, por diseño). Se creó `tests/AppTest.php` cubriendo todo lo testeable sin mockear el entorno HTTP completo: `isProduction()` (vía Reflection, las 3 fuentes de detección y su precedencia), y el wiring fluido de `useMiddleware()`/`useController()`/`enableSwagger()`/`getContainer()`. `run()` sigue deliberadamente sin test directo (requiere mockear superglobales de request; decisión de diseño documentada desde el inicio del proyecto en `tests/README.md`, no un defecto). Commit `b4202f2`.
+- **Validación estructural de rutas cacheadas no cubre todos los campos futuros si el formato cambia** — ⬜ Aceptado como limitación residual, no actionable sin sobre-ingeniería (endurecer más allá de las claves actuales requeriría versionar el formato del caché, fuera de alcance mientras el formato no cambie).
 
-## Validación final (Ronda 2)
+## Validación final (todos los hallazgos documentados, incluyendo la limpieza posterior a la Ronda 2)
 
 ```
 $ vendor/bin/phpunit
 OK, but incomplete, skipped, or risky tests!
-Tests: 224, Assertions: 385, Skipped: 3.
+Tests: 236, Assertions: 401, Skipped: 3.
 ```
 Los 3 *skipped* corresponden a `ApcuRateLimitStoreTest`, gateados por
 `extension_loaded('apcu')` (la extensión no está instalada en este
 entorno de desarrollo). `grep` de marcadores de conflicto en el repo
-completo retorna vacío.
+completo retorna vacío. Diagnósticos del proyecto sin errores nuevos
+(el falso positivo previo de `Container.php` desapareció como efecto
+colateral del refactor de `ContainerAwareInterface`).
+
+**Estado global final: 22/22 hallazgos de auditoría corregidos, más 4
+hallazgos adicionales de limpieza post-Ronda 2 corregidos (1 aceptado
+como limitación residual no actionable).**
