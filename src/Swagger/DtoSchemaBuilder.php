@@ -138,6 +138,9 @@ class DtoSchemaBuilder
     /*  Helpers                                                             */
     /* ------------------------------------------------------------------ */
 
+    /**
+     * @return array<string, mixed>
+     */
     private function inferTypeFromPhp(\ReflectionProperty $prop): array
     {
         $type = $prop->getType();

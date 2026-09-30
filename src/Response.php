@@ -75,6 +75,9 @@ class Response
         return $res;
     }
 
+    /**
+     * @param array<string, mixed> $data Datos a pasar a la vista.
+     */
     public static function render(string $view, array $data = [], int $status = 200): self
     {
         if (!self::$viewEngine) {
