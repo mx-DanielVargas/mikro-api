@@ -21,6 +21,9 @@ class App
     /** SwaggerUI listo para despachar, o null si no está habilitado */
     private ?SwaggerUI $swaggerUI = null;
 
+    /** Ruta de archivo de caché de rutas pendiente de escribir en run() */
+    private ?string $pendingRouteCacheFile = null;
+
     public function __construct(?Container $container = null)
     {
         $this->container = $container ?? new Container();
@@ -119,11 +122,39 @@ class App
     }
 
     /* ------------------------------------------------------------------ */
+    /*  Caché de rutas                                                      */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Habilita caché de rutas compiladas. Si el archivo indicado existe y es
+     * válido, las rutas se cargan desde ahí (evitando reflexión). Si no existe
+     * o está corrupto, se generará automáticamente al llamar a run() (después
+     * de que todos los useController() ya se hayan registrado) (AUD-006).
+     *
+     * Uso:
+     *   $app->cacheRoutes(__DIR__ . '/cache/routes.php')
+     *       ->useController(UserController::class, PostController::class)
+     *       ->run();
+     */
+    public function cacheRoutes(string $cacheFile): self
+    {
+        if (!$this->router->loadFromCache($cacheFile)) {
+            $this->pendingRouteCacheFile = $cacheFile;
+        }
+        return $this;
+    }
+
+    /* ------------------------------------------------------------------ */
     /*  Run                                                                 */
     /* ------------------------------------------------------------------ */
 
     public function run(): void
     {
+        if ($this->pendingRouteCacheFile !== null) {
+            $this->router->cacheTo($this->pendingRouteCacheFile);
+            $this->pendingRouteCacheFile = null;
+        }
+
         try {
             $request = Request::capture();
 

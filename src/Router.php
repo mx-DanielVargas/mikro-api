@@ -14,6 +14,8 @@ class Router
 
     private ?Container $container = null;
 
+    private bool $loadedFromCache = false;
+
     public function setContainer(Container $container): void
     {
         $this->container = $container;
@@ -25,6 +27,10 @@ class Router
 
     public function registerController(string $controllerClass): void
     {
+        if ($this->loadedFromCache) {
+            return; // las rutas ya se cargaron desde caché, evitar reflexión redundante
+        }
+
         $refClass    = new \ReflectionClass($controllerClass);
         $prefix      = '';
         $classGuards = [];
@@ -88,6 +94,48 @@ class Router
                 ];
             }
         }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Caché de rutas                                                      */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Intenta cargar las rutas desde un archivo de caché generado
+     * previamente con cacheTo(). Si el archivo no existe o no contiene
+     * un array válido, retorna false y no modifica el estado del router.
+     */
+    public function loadFromCache(string $path): bool
+    {
+        if (!\is_file($path)) {
+            return false;
+        }
+
+        $cached = require $path;
+        if (!\is_array($cached)) {
+            return false;
+        }
+
+        $this->routes         = $cached;
+        $this->loadedFromCache = true;
+        return true;
+    }
+
+    /**
+     * Serializa las rutas actualmente registradas a un archivo PHP que
+     * puede cargarse luego con loadFromCache(), evitando la reflexión
+     * de todos los controladores en requests subsecuentes (AUD-006).
+     */
+    public function cacheTo(string $path): void
+    {
+        $dir = \dirname($path);
+        if (!\is_dir($dir)) {
+            \mkdir($dir, 0755, true);
+        }
+
+        $export = \var_export($this->routes, true);
+        $contents = "<?php\n\n// Generado automáticamente por App::cacheRoutes(). No editar a mano.\nreturn {$export};\n";
+        \file_put_contents($path, $contents);
     }
 
     /* ------------------------------------------------------------------ */
