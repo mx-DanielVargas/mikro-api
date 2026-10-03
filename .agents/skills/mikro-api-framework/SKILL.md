@@ -60,6 +60,7 @@ Check which context you're in before reading anything else:
 - Guards/middleware/DTO validation all run **before** the controller method — a controller only ever sees a request that already passed auth + validation.
 - `RelationLoader` can resolve related repositories with extra constructor dependencies via the DI Container (`ContainerAwareInterface`), but only if the repository was itself resolved through the Container (not `new SomeRepository($db)` directly).
 - **After `vendor/bin/mikro-migrate init` on a project whose `composer.json` already existed**, always tell the user to run `composer dump-autoload` (or `composer install`) next — `init` merges the required `autoload.psr-4`/`require` entries into the file, but Composer only regenerates its autoloader on install/update/dump-autoload, not on a plain `composer.json` edit. Skipping this step causes `Uncaught ReflectionException: Class "App\Controllers\...Controller" does not exist` in `Router.php`.
+- **`Database` also supports a `'turso'` driver** (Turso/libSQL) — same SQL dialect as SQLite (`getDriver()` reports it as `'sqlite'` to the rest of the framework), zero application-code changes needed. Requires the optional `turso/libsql` package (PHP >= 8.3 + FFI) and, critically, `ffi.enable=true` set **explicitly** in `php.ini` — its default (`"preload"`) does not cover `php -S` or typical FPM/CLI execution, so without it `Libsql\PDO` throws `FFI\Exception: FFI API is restricted by "ffi.enable" configuration directive`.
 
 ## End-to-end: add a resource (e.g. "Product")
 

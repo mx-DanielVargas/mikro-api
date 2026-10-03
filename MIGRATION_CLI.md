@@ -156,6 +156,25 @@ return [
 ];
 ```
 
+### Running migrations against Turso/libSQL
+
+If `config/database.php` uses `'driver' => 'turso'` (see the root `README.md` → "Database Configuration" → "Turso / libSQL" for the full config shape), `vendor/bin/mikro-migrate migrate`/`rollback`/`reset`/`status` work exactly the same as with `sqlite`/`mysql` — `MigrationRunner` and `SchemaBuilder` treat `turso` as the SQLite dialect automatically.
+
+The one thing to get right before running any command: `turso/libsql` requires PHP >= 8.3 and the FFI extension with **`ffi.enable=true`** set explicitly in `php.ini` (its default, `"preload"`, does not cover plain CLI/FPM execution). Without it:
+
+```bash
+$ vendor/bin/mikro-migrate migrate
+Error: FFI API is restricted by "ffi.enable" configuration directive
+```
+
+Fix by running with the flag set, e.g.:
+
+```bash
+php -d ffi.enable=true vendor/bin/mikro-migrate migrate
+```
+
+or set `ffi.enable=true` permanently in the `php.ini` used by your CLI SAPI.
+
 ## Migration Files
 
 Migration files are stored in:

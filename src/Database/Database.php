@@ -4,7 +4,7 @@ namespace MikroApi\Database;
 
 /**
  * Wrapper de PDO. Singleton simple para compartir la conexión.
- * Soporta SQLite y MySQL/MariaDB.
+ * Soporta SQLite, MySQL/MariaDB y Turso/libSQL.
  *
  * SQLite (config/database.php):
  *   return [
@@ -22,6 +22,16 @@ namespace MikroApi\Database;
  *       'password' => 'secret',
  *       'charset'  => 'utf8mb4',
  *   ];
+ *
+ * Turso/libSQL (config/database.php) — requiere `composer require turso/libsql`
+ * (PHP >= 8.3 + extensión FFI con `ffi.enable=true`; ver MIGRATION_CLI.md):
+ *   return [
+ *       'driver'        => 'turso',
+ *       'database'      => __DIR__ . '/../database/database.sqlite', // réplica local; null si es solo remoto
+ *       'url'           => $_ENV['TURSO_DATABASE_URL'] ?? null,       // omitir para un archivo local puro
+ *       'auth_token'    => $_ENV['TURSO_AUTH_TOKEN'] ?? null,         // omitir para un archivo local puro
+ *       'sync_interval' => (int) ($_ENV['TURSO_SYNC_INTERVAL'] ?? 0), // segundos; 0 = sin sync periódico
+ *   ];
  */
 class Database
 {
@@ -32,6 +42,34 @@ class Database
     private function __construct(array $config)
     {
         $this->driver = $config['driver'] ?? 'sqlite';
+
+        if ($this->driver === 'turso') {
+            if (!\class_exists(\Libsql\PDO::class)) {
+                throw new \RuntimeException(
+                    "El driver 'turso' requiere el paquete turso/libsql. Instálalo con: composer require turso/libsql"
+                );
+            }
+
+            $path = $config['database'] ?? null;
+            if ($path !== null && $path !== ':memory:') {
+                $dir = \dirname($path);
+                if (!\is_dir($dir)) {
+                    \mkdir($dir, 0755, true);
+                }
+            }
+
+            $this->pdo = new \Libsql\PDO(
+                dsn: $path,
+                username: null,
+                password: $config['auth_token'] ?? null,
+                options: [
+                    'url'          => $config['url'] ?? null,
+                    'syncInterval' => $config['sync_interval'] ?? 0,
+                ],
+            );
+
+            return;
+        }
 
         $dsn      = $this->buildDsn($config);
         $username = $config['username'] ?? null;
@@ -79,7 +117,12 @@ class Database
 
     public function getDriver(): string
     {
-        return $this->driver;
+        // libSQL habla el dialecto SQL de SQLite; MigrationRunner y
+        // SchemaBuilder deciden el dialecto comparando este string contra
+        // 'sqlite'/'mysql' en ~20 sitios, así que se traduce una sola vez
+        // aquí en vez de tocar cada call site. El campo interno $driver
+        // conserva 'turso' (lo usa el constructor para elegir Libsql\PDO).
+        return $this->driver === 'turso' ? 'sqlite' : $this->driver;
     }
 
     public function getPdo(): \PDO
@@ -96,14 +139,14 @@ class Database
     {
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(\PDO::FETCH_ASSOC);
     }
 
     public function queryOne(string $sql, array $params = []): ?array
     {
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
-        $row = $stmt->fetch();
+        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
         return $row ?: null;
     }
 

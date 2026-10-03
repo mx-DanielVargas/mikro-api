@@ -161,4 +161,58 @@ class DatabaseTest extends TestCase
         $count = $db->queryOne("SELECT COUNT(*) as total FROM users");
         $this->assertEquals(0, $count['total']);
     }
+
+    public function testTursoDriverThrowsClearErrorWhenPackageMissing(): void
+    {
+        if (\class_exists(\Libsql\PDO::class)) {
+            $this->markTestSkipped('turso/libsql está instalado en este entorno; este test valida el guard que se activa cuando NO lo está.');
+        }
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('composer require turso/libsql');
+
+        Database::connect(['driver' => 'turso', 'database' => ':memory:']);
+    }
+
+    public function testGetDriverTranslatesTursoToSqlite(): void
+    {
+        // libSQL habla el dialecto SQL de SQLite; getDriver() debe traducir
+        // 'turso' -> 'sqlite' para que MigrationRunner/SchemaBuilder tomen
+        // las mismas decisiones de dialecto. No podemos conectar realmente
+        // vía 'turso' en este entorno (requiere el paquete turso/libsql +
+        // FFI), así que forzamos el campo privado $driver por Reflection
+        // sobre una conexión sqlite real ya establecida.
+        $db = Database::connect(['driver' => 'sqlite', 'database' => ':memory:']);
+
+        $reflection = new \ReflectionClass(Database::class);
+        $driverProp = $reflection->getProperty('driver');
+        $driverProp->setAccessible(true);
+        $driverProp->setValue($db, 'turso');
+
+        $this->assertEquals('sqlite', $db->getDriver());
+    }
+
+    public function testQueryAndQueryOneReturnOnlyStringKeys(): void
+    {
+        // Guarda de regresión para el fetch mode explícito: antes de este
+        // fix, query()/queryOne() dependían únicamente del atributo de
+        // conexión PDO::ATTR_DEFAULT_FETCH_MODE, que Libsql\PDOStatement no
+        // respeta (su default es FETCH_BOTH). Pasar \PDO::FETCH_ASSOC
+        // explícitamente es un no-op para sqlite/mysql (ya era su default
+        // efectivo) pero vuelve el comportamiento correcto también con
+        // Turso. Este test fija la forma del array para cualquier driver.
+        $db = Database::connect(['driver' => 'sqlite', 'database' => ':memory:']);
+        $db->execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
+        $db->execute("INSERT INTO users (name) VALUES ('John')");
+
+        $rows = $db->query("SELECT * FROM users");
+        foreach (array_keys($rows[0]) as $key) {
+            $this->assertIsString($key, 'query() debe retornar únicamente claves string');
+        }
+
+        $row = $db->queryOne("SELECT * FROM users WHERE name = ?", ['John']);
+        foreach (array_keys($row) as $key) {
+            $this->assertIsString($key, 'queryOne() debe retornar únicamente claves string');
+        }
+    }
 }

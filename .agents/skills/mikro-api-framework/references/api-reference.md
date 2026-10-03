@@ -270,10 +270,10 @@ class MigrationRunner {
 
 ```php
 class Database {
-    static connect(array $config): self   // config: driver ('sqlite'|'mysql'), database, host, port, username, password, charset
+    static connect(array $config): self   // config: driver ('sqlite'|'mysql'|'turso'), database, host, port, username, password, charset
     static getInstance(): self
     static reset(): void                  // mainly for tests
-    getDriver(): string
+    getDriver(): string                   // 'turso' is reported as 'sqlite' (same SQL dialect) to every consumer
     getPdo(): \PDO
     execute(string $sql): void
     query(string $sql, array $params = []): array
@@ -282,7 +282,8 @@ class Database {
     transaction(callable $callback): mixed   // commits on success, rolls back and re-throws on any Throwable
 }
 ```
-Note: binding a PHP `bool` into an `INTEGER`/`TINYINT` column via PDO can insert an empty string instead of `0`/`1` on SQLite — cast explicitly to `(int)` before writing booleans.
+- Note: binding a PHP `bool` into an `INTEGER`/`TINYINT` column via PDO can insert an empty string instead of `0`/`1` on SQLite — cast explicitly to `(int)` before writing booleans.
+- **`'turso'` driver** (Turso/libSQL — SQLite with native read-replica support): config needs `database` (local replica path, or omit for remote-only), `url`/`auth_token` (Turso Cloud; omit both for a purely local file), `sync_interval` (seconds, 0 = none). Requires the optional `turso/libsql` Composer package (PHP >= 8.3 + FFI) — resolved lazily via `class_exists()`; `connect()` throws a clear `RuntimeException` if it's missing. **Gotcha:** `ffi.enable` defaults to `"preload"`, which does NOT cover `php -S`/typical FPM — you must set `ffi.enable=true` explicitly in `php.ini` or via `-d`, or `Libsql\PDO`'s constructor throws `FFI\Exception`.
 
 ## Template Engine — `View\Engine`
 

@@ -19,6 +19,9 @@
         "phpunit/phpunit": "9.5.28",
         "doctrine/instantiator": "^1.5"
     },
+    "suggest": {
+        "turso/libsql": "Required to use the 'turso' database driver (Database::connect with driver => 'turso'); needs PHP >= 8.3 and the FFI extension with ffi.enable=true"
+    },
     "autoload": {
         "psr-4": {
             "MikroApi\\": "src/"

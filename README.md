@@ -553,6 +553,35 @@ return [
 ];
 ```
 
+### Turso / libSQL
+
+MikroAPI also supports [Turso](https://turso.tech)/[libSQL](https://turso.tech/libsql) as a third driver — a hosted libSQL database (SQLite with native read-replica support). Since Turso speaks the SQLite SQL dialect and ships a `Libsql\PDO` class that is a genuine drop-in `\PDO` subclass, every repository, `QueryBuilder` query, relation, transaction, and migration keeps working unchanged — it's purely a config swap.
+
+```bash
+composer require turso/libsql
+```
+
+```php
+<?php
+return [
+    'driver'        => 'turso',
+    'database'      => __DIR__ . '/../database/database.sqlite', // local replica path; omit/null for remote-only
+    'url'           => $_ENV['TURSO_DATABASE_URL'] ?? null,       // omit for a purely local file, no cloud needed
+    'auth_token'    => $_ENV['TURSO_AUTH_TOKEN'] ?? null,         // omit for a purely local file
+    'sync_interval' => (int) ($_ENV['TURSO_SYNC_INTERVAL'] ?? 0), // seconds; 0 = no periodic background sync
+];
+```
+
+Which keys you set determines the mode:
+
+| Mode | `database` | `url` | `auth_token` |
+|---|---|---|---|
+| Local file only (no cloud account needed) | set | omitted | omitted |
+| Remote only (every query hits Turso Cloud) | omitted | set | set |
+| Embedded replica (local file synced with a remote primary) | set | set | set |
+
+> ⚠️ **Requirements**: PHP **>= 8.3** and the **FFI extension**, with `ffi.enable=true` explicitly set in `php.ini` (or via `-d ffi.enable=true`). PHP's `ffi.enable` directive defaults to `"preload"`, which does **not** cover the built-in dev server (`php -S`) or a typical FPM/Apache request — without setting it explicitly, connecting throws `FFI\Exception: FFI API is restricted by "ffi.enable" configuration directive`. `turso/libsql` is an optional dependency, resolved lazily via `class_exists()` — if it's missing, `Database::connect()` throws a clear `RuntimeException` telling you to `composer require turso/libsql` instead of failing with an FFI/autoload error.
+
 ## Database Transactions
 
 ```php
