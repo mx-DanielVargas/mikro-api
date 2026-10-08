@@ -7,6 +7,8 @@ namespace MikroApi\Config;
  *
  * Loads environment variables from .env files and provides
  * typed access with dot-notation, defaults, and validation.
+ * Keys missing from the .env files fall back to the real process
+ * environment ($_ENV / getenv()).
  *
  * Usage:
  *   $config = new ConfigService(__DIR__);
@@ -69,7 +71,14 @@ class ConfigService
             }
         }
 
-        return $this->values[$key] ?? $default;
+        if (array_key_exists($key, $this->values)) {
+            return $this->values[$key];
+        }
+
+        // Fallback a variables reales del proceso (ej. secretos inyectados por
+        // el orquestador en producción, sin archivo .env)
+        $fromEnv = $_ENV[$key] ?? getenv($key);
+        return $fromEnv !== false && $fromEnv !== null ? $fromEnv : $default;
     }
 
     /**

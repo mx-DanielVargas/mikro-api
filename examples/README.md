@@ -6,6 +6,7 @@ This directory contains complete, runnable applications demonstrating every majo
 |---|---|
 | [`basic/`](./basic) | Minimal routing — the smallest possible MikroAPI app |
 | [`auth/`](./auth) | JWT authentication with guards |
+| [`modules/`](./modules) | Modules, dynamic modules, built-in JWT/roles guards, parameter injection, interceptors, exception filters |
 | [`swagger/`](./swagger) | Full Swagger/OpenAPI documentation generation |
 | [`crud-api/`](./crud-api) | Repository pattern, migrations, relations, soft deletes, pagination, transactions |
 | [`middleware/`](./middleware) | The full middleware pipeline: CORS, rate limiting, JSON body validation, custom middleware |
@@ -46,6 +47,30 @@ curl -X POST http://localhost:8000/auth/login \
 # Use the token from response
 curl http://localhost:8000/auth/me \
   -H "Authorization: Bearer YOUR_TOKEN_HERE"
+```
+
+## Modules Example
+
+NestJS-style app: `ConfigModule::forRoot()` loads `.env` (copy `.env.example`), and an `AppModule` imports a global `AuthModule` whose `JwtService` is built by a factory that injects `ConfigService`, plus a `ProductsModule`. Shows global guards with `#[PublicRoute]`, `#[Roles]` + `RolesGuard`, `#[Param]`/`#[Query]`/`#[Body]`/`#[CurrentUser]` injection, an interceptor that wraps responses and a global exception filter.
+
+```bash
+cd examples/modules
+php -S localhost:8000 index.php
+```
+
+Test it:
+```bash
+# Public route, enum query param (400 if invalid)
+curl "http://localhost:8000/products?status=archived"
+
+# Login (any email; password "secret123"; emails starting with "admin" get the admin role)
+curl -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@example.com","password":"secret123"}'
+
+# Protected routes
+curl http://localhost:8000/products/1 -H "Authorization: Bearer YOUR_TOKEN_HERE"
+curl -X DELETE http://localhost:8000/products/1 -H "Authorization: Bearer YOUR_TOKEN_HERE"   # 403 without admin role
 ```
 
 ## Swagger Documentation Example

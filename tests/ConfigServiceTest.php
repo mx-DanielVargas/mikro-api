@@ -221,11 +221,30 @@ class ConfigServiceTest extends TestCase
 
     public function testValidateThrowsWithMissingKeys(): void
     {
+        // Claves únicas: otros tests exportan A/B/C a $_ENV y get() cae al entorno del proceso
         $config = new ConfigService();
-        $config->set('A', '1');
+        $config->set('VALIDATE_TEST_A', '1');
 
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('B, C');
-        $config->validate(['A', 'B', 'C']);
+        $this->expectExceptionMessage('VALIDATE_TEST_B, VALIDATE_TEST_C');
+        $config->validate(['VALIDATE_TEST_A', 'VALIDATE_TEST_B', 'VALIDATE_TEST_C']);
+    }
+
+    public function testFallsBackToProcessEnvButEnvFileWins(): void
+    {
+        putenv('CFG_PROCESS_ONLY=from-process');
+        putenv('CFG_BOTH=from-process');
+
+        try {
+            $config = new ConfigService();
+            $config->set('CFG_BOTH', 'from-file');
+
+            $this->assertSame('from-process', $config->get('CFG_PROCESS_ONLY'));
+            $this->assertSame('from-file', $config->get('CFG_BOTH'));
+            $this->assertSame('dflt', $config->get('CFG_NOWHERE', 'dflt'));
+        } finally {
+            putenv('CFG_PROCESS_ONLY');
+            putenv('CFG_BOTH');
+        }
     }
 }
