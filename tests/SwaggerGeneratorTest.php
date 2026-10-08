@@ -2,8 +2,10 @@
 
 namespace MikroApi\Tests;
 
+use MikroApi\App;
 use MikroApi\Swagger\SwaggerGenerator;
 use MikroApi\Attributes\Controller;
+use MikroApi\Attributes\PublicRoute;
 use MikroApi\Attributes\Route;
 use MikroApi\Attributes\Body;
 use MikroApi\Attributes\ApiDoc;
@@ -138,6 +140,49 @@ class SwaggerGeneratorTest extends TestCase
         $show = $spec['paths']['/api/items/{id}']['get'] ?? [];
         $this->assertArrayHasKey('security', $show);
     }
+
+    public function testGlobalAuthGuardSecuresEveryNonPublicRoute(): void
+    {
+        $this->gen->setAuthGuards([SwaggerTestGuard::class])->setGlobalGuards([SwaggerTestGuard::class]);
+
+        $spec = $this->gen->generate(
+            controllers: [SwaggerPublicTestController::class],
+            excludeControllers: [],
+            config: ['title' => 'Test', 'version' => '1.0'],
+        );
+
+        $this->assertSame([['bearerAuth' => []]], $spec['paths']['/api/account']['get']['security'] ?? null);
+        $this->assertArrayNotHasKey('security', $spec['paths']['/api/account/login']['post']);
+        $this->assertArrayHasKey('bearerAuth', $spec['components']['securitySchemes'] ?? []);
+    }
+
+    public function testGlobalNonAuthGuardDoesNotAddSecurity(): void
+    {
+        // Sin setAuthGuards se detecta por nombre ('Jwt'/'Auth'); un guard de throttling no cuenta.
+        $this->gen->setGlobalGuards([SwaggerTestThrottleGuard::class]);
+
+        $spec = $this->gen->generate(
+            controllers: [SwaggerPublicTestController::class],
+            excludeControllers: [],
+            config: ['title' => 'Test', 'version' => '1.0'],
+        );
+
+        $this->assertArrayNotHasKey('security', $spec['paths']['/api/account']['get']);
+        $this->assertArrayNotHasKey('securitySchemes', $spec['components'] ?? []);
+    }
+
+    public function testAppPassesGlobalGuardsRegisteredAfterEnableSwagger(): void
+    {
+        $app = (new App())
+            ->useController(SwaggerPublicTestController::class)
+            ->enableSwagger(authGuards: [SwaggerTestGuard::class])
+            ->useGlobalGuards(SwaggerTestGuard::class);
+
+        $spec = \json_decode($app->handle(Request::create('GET', '/docs/json'))->getBody(), true);
+
+        $this->assertArrayHasKey('security', $spec['paths']['/api/account']['get']);
+        $this->assertArrayNotHasKey('security', $spec['paths']['/api/account/login']['post']);
+    }
 }
 
 // ── Test fixtures ───────────────────────────────────────────────────────
@@ -180,6 +225,30 @@ class SwaggerTestGuard implements \MikroApi\GuardInterface
 {
     public function canActivate(Request $r): bool { return true; }
     public function deny(): Response { return Response::error('Unauthorized', 401); }
+}
+
+class SwaggerTestThrottleGuard implements \MikroApi\GuardInterface
+{
+    public function canActivate(Request $r): bool { return true; }
+    public function deny(): Response { return Response::error('Too Many Requests', 429); }
+}
+
+/** Sin #[UseGuards]: la protección viene solo de un guard global. */
+#[Controller('/api/account')]
+class SwaggerPublicTestController
+{
+    #[Route('GET', '/')]
+    public function profile(Request $r): Response
+    {
+        return Response::json([]);
+    }
+
+    #[PublicRoute]
+    #[Route('POST', '/login')]
+    public function login(Request $r): Response
+    {
+        return Response::json([]);
+    }
 }
 
 class SwaggerTestCreateDto

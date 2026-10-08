@@ -35,6 +35,7 @@ All notable changes to this project will be documented in this file.
 - `tests/AppTest.php`: test coverage for `App` (`isProduction()` detection, fluent method wiring) without mocking the full HTTP request/response cycle
 
 ### Fixed
+- Swagger: guards registered with `App::useGlobalGuards()` are now taken into account — a global `JwtGuard` marks every non-`#[PublicRoute]` endpoint with `security: bearerAuth` and adds the `bearerAuth` security scheme (lock icon + Authorize button). Previously only `#[UseGuards]` on the class/method was considered. New `SwaggerGenerator::setGlobalGuards()`; works regardless of whether `useGlobalGuards()` is called before or after `enableSwagger()`
 - `App::run()` no longer leaks internal exception messages in production when `APP_ENV` is only set via `.env` — new `App::isProduction()` checks `$_ENV`, `$_SERVER`, and `getenv()` instead of only `$_SERVER`
 - `BaseRepository`: column names derived from request data are now validated against a safe SQL identifier pattern (`assertValidColumnName()`), preventing SQL injection through `INSERT`/`UPDATE` when `$fillable` is not declared
 - Swagger/OpenAPI spec generation is now lazy and memoized (only runs, at most once, when `/docs` or `/docs/json` is actually requested) instead of eagerly on every request

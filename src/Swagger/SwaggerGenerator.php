@@ -29,6 +29,9 @@ class SwaggerGenerator
     /** Clases de guards que implican autenticación Bearer */
     private array $authGuards = [];
 
+    /** Guards globales (App::useGlobalGuards), aplican a toda ruta no pública */
+    private array $globalGuards = [];
+
     public function __construct()
     {
         $this->schemaBuilder = new DtoSchemaBuilder();
@@ -41,6 +44,17 @@ class SwaggerGenerator
     public function setAuthGuards(array $guardClasses): self
     {
         $this->authGuards = $guardClasses;
+        return $this;
+    }
+
+    /**
+     * Registra los guards globales de la app. Se suman a los de clase y
+     * método de cada ruta, así un JwtGuard global marca como protegidos
+     * todos los endpoints salvo los #[PublicRoute].
+     */
+    public function setGlobalGuards(array $guardClasses): self
+    {
+        $this->globalGuards = $guardClasses;
         return $this;
     }
 
@@ -130,7 +144,7 @@ class SwaggerGenerator
             $swaggerPath = $this->toSwaggerPath($fullPath);
 
             $methodGuards = $this->extractGuards($method->getAttributes(UseGuards::class));
-            $allGuards    = \array_merge($classGuards, $methodGuards);
+            $allGuards    = \array_merge($this->globalGuards, $classGuards, $methodGuards);
 
             // Rutas #[PublicRoute] no requieren autenticación aunque haya guards
             if ($this->isPublic($ref, $method)) {
