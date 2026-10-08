@@ -109,6 +109,22 @@ class Response
         return $this->status;
     }
 
+    /** @return array<string, string> */
+    public function getHeaders(): array
+    {
+        return $this->headers;
+    }
+
+    public function getHeader(string $name): ?string
+    {
+        foreach ($this->headers as $key => $value) {
+            if (\strcasecmp($key, $name) === 0) {
+                return $value;
+            }
+        }
+        return null;
+    }
+
     public function getBody(): string
     {
         return $this->body;

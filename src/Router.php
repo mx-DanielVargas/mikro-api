@@ -5,20 +5,70 @@ namespace MikroApi;
 use MikroApi\Attributes\Body;
 use MikroApi\Attributes\Controller;
 use MikroApi\Attributes\Route;
+use MikroApi\Attributes\UseFilters;
 use MikroApi\Attributes\UseGuards;
+use MikroApi\Attributes\UseInterceptors;
+use MikroApi\Exception\ExceptionHandler;
+use MikroApi\Exception\MethodNotAllowedException;
+use MikroApi\Exception\NotFoundException;
+use MikroApi\Exception\ValidationException;
+use MikroApi\Interceptor\InterceptorInterface;
 
+/**
+ * Registra rutas a partir de los atributos de los controladores y despacha
+ * cada petición por el pipeline:
+ *
+ *   guards (globales → clase → método)
+ *     → interceptors (globales → clase → método)
+ *       → validación/inyección de argumentos (#[Body], #[Param], #[Query]...)
+ *         → handler
+ *
+ * Cualquier excepción del pipeline pasa por los exception filters
+ * (método → clase → globales) y, si ninguno la atiende, por el manejo por
+ * defecto de ExceptionHandler. dispatch() siempre retorna una Response.
+ */
 class Router
 {
-    /** @var array<int, array{method:string, pattern:string, regex:string, paramNames:string[], controller:string, action:string, guards:string[], dto:string|null}> */
+    /**
+     * @var array<int, array{method:string, pattern:string, regex:string, paramNames:string[], controller:string,
+     *     action:string, guards:string[], dto:string|null, interceptors?:string[], filters?:string[], args?:array|null}>
+     */
     private array $routes = [];
 
     private ?Container $container = null;
 
     private bool $loadedFromCache = false;
 
+    /** @var string[] */
+    private array $globalGuards = [];
+
+    /** @var string[] */
+    private array $globalInterceptors = [];
+
+    /** @var string[] */
+    private array $globalFilters = [];
+
     public function setContainer(Container $container): void
     {
         $this->container = $container;
+    }
+
+    /** @param string[] $guards */
+    public function setGlobalGuards(array $guards): void
+    {
+        $this->globalGuards = $guards;
+    }
+
+    /** @param string[] $interceptors */
+    public function setGlobalInterceptors(array $interceptors): void
+    {
+        $this->globalInterceptors = $interceptors;
+    }
+
+    /** @param string[] $filters */
+    public function setGlobalFilters(array $filters): void
+    {
+        $this->globalFilters = $filters;
     }
 
     /* ------------------------------------------------------------------ */
@@ -31,9 +81,8 @@ class Router
             return; // las rutas ya se cargaron desde caché, evitar reflexión redundante
         }
 
-        $refClass    = new \ReflectionClass($controllerClass);
-        $prefix      = '';
-        $classGuards = [];
+        $refClass = new \ReflectionClass($controllerClass);
+        $prefix   = '';
 
         $ctrlAttrs = $refClass->getAttributes(Controller::class);
         if (!empty($ctrlAttrs)) {
@@ -43,27 +92,16 @@ class Router
             if ($prefix === '//') $prefix = '/';
         }
 
-        // Guards a nivel de clase
-        foreach ($refClass->getAttributes(UseGuards::class) as $guardAttr) {
-            /** @var UseGuards $guardInst */
-            $guardInst   = $guardAttr->newInstance();
-            $classGuards = array_merge($classGuards, $guardInst->guards);
-        }
+        $classGuards       = $this->collectClasses($refClass, UseGuards::class, 'guards');
+        $classInterceptors = $this->collectClasses($refClass, UseInterceptors::class, 'interceptors');
+        $classFilters      = $this->collectClasses($refClass, UseFilters::class, 'filters');
 
         // Iterar métodos públicos
         foreach ($refClass->getMethods(\ReflectionMethod::IS_PUBLIC) as $method) {
             $routeAttrs = $method->getAttributes(Route::class);
             if (empty($routeAttrs)) continue;
 
-            // Guards del método
-            $methodGuards = [];
-            foreach ($method->getAttributes(UseGuards::class) as $guardAttr) {
-                /** @var UseGuards $guardInst */
-                $guardInst    = $guardAttr->newInstance();
-                $methodGuards = array_merge($methodGuards, $guardInst->guards);
-            }
-
-            // DTO de validación del body (si existe)
+            // DTO de validación del body a nivel de método (forma clásica)
             $dtoClass  = null;
             $bodyAttrs = $method->getAttributes(Body::class);
             if (!empty($bodyAttrs)) {
@@ -71,6 +109,12 @@ class Router
                 $bodyAttr = $bodyAttrs[0]->newInstance();
                 $dtoClass = $bodyAttr->dtoClass;
             }
+
+            $guards       = array_merge($classGuards, $this->collectClasses($method, UseGuards::class, 'guards'));
+            $interceptors = array_merge($classInterceptors, $this->collectClasses($method, UseInterceptors::class, 'interceptors'));
+            // Filtros: del más específico al más general
+            $filters      = array_merge($this->collectClasses($method, UseFilters::class, 'filters'), $classFilters);
+            $args         = ArgumentResolver::describe($method);
 
             // Register a route entry for each #[Route] attribute
             foreach ($routeAttrs as $rAttr) {
@@ -83,17 +127,30 @@ class Router
                 [$regex, $paramNames] = $this->buildRegex($fullPath);
 
                 $this->routes[] = [
-                    'method'     => strtoupper($routeAttr->method),
-                    'pattern'    => $fullPath,
-                    'regex'      => $regex,
-                    'paramNames' => $paramNames,
-                    'controller' => $controllerClass,
-                    'action'     => $method->getName(),
-                    'guards'     => array_merge($classGuards, $methodGuards),
-                    'dto'        => $dtoClass,
+                    'method'       => strtoupper($routeAttr->method),
+                    'pattern'      => $fullPath,
+                    'regex'        => $regex,
+                    'paramNames'   => $paramNames,
+                    'controller'   => $controllerClass,
+                    'action'       => $method->getName(),
+                    'guards'       => $guards,
+                    'dto'          => $dtoClass,
+                    'interceptors' => $interceptors,
+                    'filters'      => $filters,
+                    'args'         => $args,
                 ];
             }
         }
+    }
+
+    /** @return string[] */
+    private function collectClasses(\ReflectionClass|\ReflectionMethod $ref, string $attrClass, string $prop): array
+    {
+        $classes = [];
+        foreach ($ref->getAttributes($attrClass) as $attr) {
+            $classes = array_merge($classes, $attr->newInstance()->$prop);
+        }
+        return $classes;
     }
 
     /* ------------------------------------------------------------------ */
@@ -165,62 +222,104 @@ class Router
 
     public function dispatch(Request $request): Response
     {
+        $allowedMethods = [];
+
         foreach ($this->routes as $route) {
-            if ($route['method'] !== $request->method) continue;
             if (!preg_match($route['regex'], $request->path, $matches)) continue;
+
+            if ($route['method'] !== $request->method) {
+                $allowedMethods[] = $route['method'];
+                continue;
+            }
 
             // Extraer parámetros de ruta
             foreach ($route['paramNames'] as $name) {
                 $request->params[$name] = $matches[$name] ?? null;
             }
 
-            // Ejecutar guards
-            foreach ($route['guards'] as $guardClass) {
-                /** @var GuardInterface $guard */
-                $guard = $this->resolve($guardClass);
-                if (!$guard->canActivate($request)) {
-                    return $guard->deny();
-                }
-            }
+            $container = $this->container;
+            $context   = new ExecutionContext($request, $route['controller'], $route['action']);
+            $request->context = $context;
 
-            // Validar body con DTO (si aplica)
+            try {
+                return $this->runRoute($route, $request, $context, $container);
+            } catch (\Throwable $e) {
+                return ExceptionHandler::handle(
+                    $e,
+                    $request,
+                    $context,
+                    array_merge($route['filters'] ?? [], $this->globalFilters),
+                    $container,
+                );
+            }
+        }
+
+        $exception = empty($allowedMethods)
+            ? new NotFoundException()
+            : new MethodNotAllowedException(array_values(array_unique($allowedMethods)));
+
+        return ExceptionHandler::handle($exception, $request, null, $this->globalFilters, $this->container);
+    }
+
+    private function runRoute(array $route, Request $request, ExecutionContext $context, ?Container $container): Response
+    {
+        // Guards: globales → clase → método
+        foreach (array_merge($this->globalGuards, $route['guards']) as $guardClass) {
+            /** @var GuardInterface $guard */
+            $guard = $this->resolve($guardClass, $container);
+            if (!$guard->canActivate($request)) {
+                return $guard->deny();
+            }
+        }
+
+        $controller = $this->resolve($route['controller'], $container);
+        $action     = $route['action'];
+
+        $handler = function () use ($route, $request, $context, $controller, $action): mixed {
+            // Validar body con DTO declarado a nivel de método (forma clásica)
             if ($route['dto'] !== null) {
                 $validator = new Validator();
                 $dto       = $validator->validate($route['dto'], $request->body);
 
                 if ($validator->hasErrors()) {
-                    return Response::json([
-                        'error'  => 'Validation failed',
-                        'errors' => $validator->getErrors(),
-                    ], 422);
+                    throw new ValidationException($validator->getErrors());
                 }
 
                 $request->dto = $dto;
             }
 
-            // Ejecutar método del controlador
-            $controller = $this->resolve($route['controller']);
-            $action     = $route['action'];
-            $response   = $controller->$action($request);
+            // Cachés generados antes de la inyección de argumentos no traen
+            // 'args': se conserva la firma clásica handler(Request $req).
+            $args = isset($route['args'])
+                ? ArgumentResolver::resolve($route['args'], $request, $context)
+                : [$request];
 
-            if (!$response instanceof Response) {
-                return Response::json($response);
-            }
+            return $controller->$action(...$args);
+        };
 
-            return $response;
+        // Interceptors: el primero de la lista es el más externo
+        $interceptors = array_merge($this->globalInterceptors, $route['interceptors'] ?? []);
+        foreach (array_reverse($interceptors) as $interceptorClass) {
+            /** @var InterceptorInterface $interceptor */
+            $interceptor = $this->resolve($interceptorClass, $container);
+            $next        = $handler;
+            $handler     = fn(): mixed => $interceptor->intercept($context, $next);
         }
 
-        return Response::error('Not Found', 404);
+        $result = $handler();
+
+        return $result instanceof Response ? $result : Response::json($result);
     }
 
     /* ------------------------------------------------------------------ */
     /*  Helpers                                                             */
     /* ------------------------------------------------------------------ */
 
-    private function resolve(string $class): object
+    private function resolve(string $class, ?Container $container = null): object
     {
-        if ($this->container !== null) {
-            return $this->container->get($class);
+        $container ??= $this->container;
+        if ($container !== null) {
+            return $container->get($class);
         }
         return new $class();
     }

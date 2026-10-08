@@ -4,6 +4,7 @@ namespace MikroApi;
 
 use MikroApi\Middleware\MiddlewareInterface;
 use MikroApi\Config\ConfigService;
+use MikroApi\Exception\ExceptionHandler;
 use MikroApi\Swagger\SwaggerGenerator;
 use MikroApi\Swagger\SwaggerUI;
 
@@ -17,6 +18,15 @@ class App
 
     /** @var MiddlewareInterface[] */
     private array $middlewares = [];
+
+    /** @var string[] */
+    private array $globalGuards = [];
+
+    /** @var string[] */
+    private array $globalInterceptors = [];
+
+    /** @var string[] */
+    private array $globalFilters = [];
 
     /** SwaggerUI listo para despachar, o null si no está habilitado */
     private ?SwaggerUI $swaggerUI = null;
@@ -45,6 +55,40 @@ class App
         foreach ($middlewares as $mw) {
             $this->middlewares[] = $mw;
         }
+        return $this;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Guards, interceptors y filtros globales                             */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Guards que se ejecutan en todas las rutas, antes que los de clase y método.
+     * Combínalo con #[PublicRoute] para excluir rutas de un JwtGuard global.
+     */
+    public function useGlobalGuards(string ...$guards): self
+    {
+        \array_push($this->globalGuards, ...$guards);
+        $this->router->setGlobalGuards($this->globalGuards);
+        return $this;
+    }
+
+    /** Interceptors que envuelven todas las rutas (los más externos). */
+    public function useGlobalInterceptors(string ...$interceptors): self
+    {
+        \array_push($this->globalInterceptors, ...$interceptors);
+        $this->router->setGlobalInterceptors($this->globalInterceptors);
+        return $this;
+    }
+
+    /**
+     * Filtros de excepciones globales. Se prueban después de los de método
+     * y clase, y también atienden errores de middlewares y 404/405.
+     */
+    public function useGlobalFilters(string ...$filters): self
+    {
+        \array_push($this->globalFilters, ...$filters);
+        $this->router->setGlobalFilters($this->globalFilters);
         return $this;
     }
 
@@ -180,14 +224,21 @@ class App
 
     public function run(): void
     {
+        $this->handle(Request::capture())->send();
+    }
+
+    /**
+     * Procesa una petición por el pipeline completo (middlewares → docs |
+     * router) y retorna la respuesta sin enviarla. Útil para tests.
+     */
+    public function handle(Request $request): Response
+    {
         if ($this->pendingRouteCacheFile !== null) {
             $this->router->cacheTo($this->pendingRouteCacheFile);
             $this->pendingRouteCacheFile = null;
         }
 
         try {
-            $request = Request::capture();
-
             // Construir pipeline: middlewares → (docs | router dispatch)
             // El chequeo de rutas de documentación vive dentro del pipeline
             // para que CORS, rate limiting, etc. también se apliquen a /docs
@@ -206,16 +257,15 @@ class App
                 $core,
             );
 
-            $response = $pipeline($request);
-            $response->send();
+            return $pipeline($request);
 
-        } catch (\MikroApi\Service\ServiceException $e) {
-            Response::error($e->getMessage(), $e->getStatusCode())->send();
         } catch (\Throwable $e) {
-            $message = $this->isProduction()
-                ? 'Internal Server Error'
-                : $e->getMessage();
-            Response::error($message, 500)->send();
+            // Excepciones fuera de una ruta (middlewares) → filtros globales
+            try {
+                return ExceptionHandler::handle($e, $request, null, $this->globalFilters, $this->container);
+            } catch (\Throwable $filterError) {
+                return ExceptionHandler::defaultResponse($filterError);
+            }
         }
     }
 
@@ -229,13 +279,7 @@ class App
      */
     private function isProduction(): bool
     {
-        $env = $_ENV['APP_ENV'] ?? $_SERVER['APP_ENV'] ?? null;
-
-        if ($env === null) {
-            $fromGetenv = getenv('APP_ENV');
-            $env = $fromGetenv !== false ? $fromGetenv : null;
-        }
-
-        return $env === 'production';
+        return ExceptionHandler::isProduction();
     }
+
 }
