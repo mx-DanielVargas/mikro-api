@@ -17,7 +17,7 @@ class SchemaBuilder
 
     public function __construct(string $driver = 'sqlite')
     {
-        $this->driver = $driver;
+        $this->driver = Database::normalizeDriver($driver);
     }
 
     public function getDriver(): string
@@ -72,18 +72,17 @@ class SchemaBuilder
             $columnDef = $this->buildColumnDef($colName, $col, $pk);
             
             // Si es SQLite y la columna es NOT NULL sin default, hacerla nullable para ALTER TABLE
-            if ($this->driver === 'sqlite' && !$col->nullable && $col->default === '__NONE__' && !$isPk) {
+            // (PostgreSQL también falla si la tabla ya tiene filas)
+            if ($this->driver !== 'mysql' && !$col->nullable && $col->default === '__NONE__' && !$isPk) {
                 // Crear una copia modificada de la columna para hacerla nullable
                 $modifiedCol = clone $col;
                 $modifiedCol->nullable = true;
                 $columnDef = $this->buildColumnDef($colName, $modifiedCol, $pk);
             }
 
-            if ($this->driver === 'mysql') {
-                $alterStatements[] = "ADD COLUMN {$columnDef}";
-            } else {
-                // SQLite
-                $alterStatements[] = "ADD COLUMN {$columnDef}";
+            $alterStatements[] = "ADD COLUMN {$columnDef}";
+            if ($comment = $this->pgComment($tableName, $colName, $col)) {
+                $postStatements[] = $comment;
             }
 
             // Unique
@@ -115,7 +114,7 @@ class SchemaBuilder
                 /** @var ForeignKey $fk */
                 $fk     = $fkAttr->newInstance();
                 $fkName = $fk->name ?? "fk_{$tableName}_{$colName}";
-                if ($this->driver === 'mysql') {
+                if ($this->driver === 'mysql' || $this->driver === 'pgsql') {
                     $alterStatements[] = "ADD CONSTRAINT `{$fkName}` FOREIGN KEY (`{$colName}`) "
                         . "REFERENCES `{$fk->references}` (`{$fk->on}`) "
                         . "ON DELETE {$fk->onDelete} ON UPDATE {$fk->onUpdate}";
@@ -129,24 +128,20 @@ class SchemaBuilder
         // Timestamps
         if ($hasTimestamps) {
             if (!\in_array('created_at', $existingColumns)) {
-                if ($this->driver === 'mysql') {
-                    $alterStatements[] = "ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP";
-                } else {
-                    $alterStatements[] = "ADD COLUMN `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP";
-                }
+                $alterStatements[] = "ADD COLUMN `created_at` {$this->timestampType()} NOT NULL DEFAULT CURRENT_TIMESTAMP";
             }
             if (!\in_array('updated_at', $existingColumns)) {
                 if ($this->driver === 'mysql') {
                     $alterStatements[] = "ADD COLUMN `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP";
                 } else {
-                    $alterStatements[] = "ADD COLUMN `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP";
+                    $alterStatements[] = "ADD COLUMN `updated_at` {$this->timestampType()} NOT NULL DEFAULT CURRENT_TIMESTAMP";
                 }
             }
         }
 
         // SoftDeletes
         if ($hasSoftDeletes && !\in_array('deleted_at', $existingColumns)) {
-            $colDef = "`deleted_at` " . ($this->driver === 'mysql' ? 'TIMESTAMP' : 'DATETIME') . " NULL DEFAULT NULL";
+            $colDef = "`deleted_at` {$this->timestampType()} NULL DEFAULT NULL";
             $alterStatements[] = "ADD COLUMN {$colDef}";
             
             $idxName = "idx_{$tableName}_deleted_at";
@@ -163,8 +158,8 @@ class SchemaBuilder
 
         $sql = '';
         
-        if ($this->driver === 'mysql') {
-            // MySQL soporta múltiples ADD COLUMN en una sola sentencia
+        if ($this->driver === 'mysql' || $this->driver === 'pgsql') {
+            // MySQL y PostgreSQL soportan múltiples acciones en una sola sentencia
             $sql = "ALTER TABLE `{$tableName}`\n  " . \implode(",\n  ", $alterStatements) . ";";
         } else {
             // SQLite requiere una sentencia ALTER TABLE por cada ADD COLUMN
@@ -177,7 +172,7 @@ class SchemaBuilder
             $sql .= "\n" . \implode("\n", $postStatements);
         }
 
-        return $sql;
+        return Database::toDialect($sql, $this->driver);
     }
 
     public function buildCreateTable(string $migrationClass): string
@@ -213,6 +208,9 @@ class SchemaBuilder
             $pk      = $isPk ? $pkAttrs[0]->newInstance() : null;
 
             $columns[] = $this->buildColumnDef($colName, $col, $pk);
+            if ($comment = $this->pgComment($tableName, $colName, $col)) {
+                $postStatements[] = $comment;
+            }
 
             if ($isPk) {
                 if ($this->driver === 'mysql') {
@@ -254,6 +252,10 @@ class SchemaBuilder
                     $foreignKeys[] = "CONSTRAINT `{$fkName}` FOREIGN KEY (`{$colName}`) "
                         . "REFERENCES `{$fk->references}` (`{$fk->on}`) "
                         . "ON DELETE {$fk->onDelete} ON UPDATE {$fk->onUpdate}";
+                } elseif ($this->driver === 'pgsql') {
+                    $foreignKeys[] = "CONSTRAINT `{$fkName}` FOREIGN KEY (`{$colName}`) "
+                        . "REFERENCES `{$fk->references}` (`{$fk->on}`) "
+                        . "ON DELETE {$fk->onDelete} ON UPDATE {$fk->onUpdate}";
                 } else {
                     // SQLite: FK inline en el CREATE TABLE
                     $foreignKeys[] = "FOREIGN KEY (`{$colName}`) REFERENCES `{$fk->references}` (`{$fk->on}`) "
@@ -268,15 +270,16 @@ class SchemaBuilder
                 $columns[] = "`created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP";
                 $columns[] = "`updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP";
             } else {
-                $columns[] = "`created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP";
-                // SQLite no tiene ON UPDATE, se maneja desde la app o un trigger
-                $columns[] = "`updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP";
+                $ts = $this->timestampType();
+                $columns[] = "`created_at` {$ts} NOT NULL DEFAULT CURRENT_TIMESTAMP";
+                // SQLite/PostgreSQL no tienen ON UPDATE: BaseRepository::update() lo setea
+                $columns[] = "`updated_at` {$ts} NOT NULL DEFAULT CURRENT_TIMESTAMP";
             }
         }
 
         // SoftDeletes
         if ($hasSoftDeletes) {
-            $columns[] = "`deleted_at` " . ($this->driver === 'mysql' ? 'TIMESTAMP' : 'DATETIME') . " NULL DEFAULT NULL";
+            $columns[] = "`deleted_at` {$this->timestampType()} NULL DEFAULT NULL";
             $idxName   = "idx_{$tableName}_deleted_at";
             if ($this->driver === 'mysql') {
                 $indexes[] = "KEY `{$idxName}` (`deleted_at`)";
@@ -293,12 +296,15 @@ class SchemaBuilder
             $sql = "CREATE TABLE IF NOT EXISTS `{$tableName}` (\n  {$body}\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{$comment};";
         } else {
             $sql = "CREATE TABLE IF NOT EXISTS `{$tableName}` (\n  {$body}\n);";
+            if ($this->driver === 'pgsql' && $table->comment) {
+                $postStatements[] = "COMMENT ON TABLE `{$tableName}` IS " . $this->quoteString($table->comment) . ';';
+            }
             if (!empty($postStatements)) {
                 $sql .= "\n" . \implode("\n", $postStatements);
             }
         }
 
-        return $sql;
+        return Database::toDialect($sql, $this->driver);
     }
 
     public function buildDropTable(string $migrationClass): string
@@ -309,7 +315,7 @@ class SchemaBuilder
             throw new \RuntimeException("La clase {$migrationClass} no tiene el atributo #[Table]");
         }
         $table = $tableAttr[0]->newInstance();
-        return "DROP TABLE IF EXISTS `{$table->name}`;";
+        return Database::toDialect("DROP TABLE IF EXISTS `{$table->name}`;", $this->driver);
     }
 
     /* ------------------------------------------------------------------ */
@@ -322,7 +328,12 @@ class SchemaBuilder
         $def  = "`{$colName}` {$type}";
 
         if ($pk !== null) {
-            if ($this->driver === 'sqlite') {
+            if ($this->driver === 'pgsql') {
+                $isInt = \in_array($col->type, ['int', 'bigint', 'integer', 'smallint', 'tinyint']);
+                $def  .= ($pk->autoIncrement && $isInt)
+                    ? ' GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY'
+                    : ' NOT NULL PRIMARY KEY';
+            } elseif ($this->driver === 'sqlite') {
                 if (in_array($col->type, ['int', 'bigint', 'integer'])) {
                     $def = "`{$colName}` INTEGER PRIMARY KEY" . ($pk->autoIncrement ? ' AUTOINCREMENT' : '');
                 } else {
@@ -334,7 +345,7 @@ class SchemaBuilder
         } else {
             $def .= $col->nullable ? ' NULL' : ' NOT NULL';
             if ($col->default !== '__NONE__') {
-                $def .= ' DEFAULT ' . $this->formatDefault($col->default);
+                $def .= ' DEFAULT ' . $this->formatDefault($col->default, $col->type);
             }
         }
 
@@ -347,6 +358,26 @@ class SchemaBuilder
 
     private function resolveType(Column $col): string
     {
+        if ($this->driver === 'pgsql') {
+            return match ($col->type) {
+                'int', 'integer'                  => 'INTEGER',
+                'bigint'                          => 'BIGINT',
+                'tinyint', 'smallint'             => 'SMALLINT',
+                'varchar'                         => 'VARCHAR(' . ($col->length ?? 255) . ')',
+                'char'                            => 'CHAR(' . ($col->length ?? 1) . ')',
+                'text', 'mediumtext', 'longtext'  => 'TEXT',
+                'decimal'                         => 'NUMERIC(' . ($col->precision ?? 10) . ',' . ($col->scale ?? 2) . ')',
+                'float'                           => 'REAL',
+                'double'                          => 'DOUBLE PRECISION',
+                'boolean'                         => 'BOOLEAN',
+                'date'                            => 'DATE',
+                'datetime', 'timestamp'           => 'TIMESTAMP',
+                'json'                            => 'JSONB',
+                'uuid'                            => 'UUID',
+                default                           => \strtoupper($col->type),
+            };
+        }
+
         if ($this->driver === 'sqlite') {
             return match ($col->type) {
                 'int', 'bigint', 'tinyint', 'smallint', 'boolean' => 'INTEGER',
@@ -381,13 +412,41 @@ class SchemaBuilder
         };
     }
 
-    private function formatDefault(mixed $value): string
+    private function formatDefault(mixed $value, ?string $columnType = null): string
     {
         if ($value === null)           return 'NULL';
+
+        // PostgreSQL es estricto con BOOLEAN: no acepta 1/0 como default
+        if ($this->driver === 'pgsql' && $columnType === 'boolean' && !\is_string($value)) {
+            return $value ? 'TRUE' : 'FALSE';
+        }
+
         if (\is_bool($value))          return $value ? '1' : '0';
         if (\is_int($value) || \is_float($value)) return (string) $value;
         if (\strtoupper((string) $value) === 'CURRENT_TIMESTAMP') return 'CURRENT_TIMESTAMP';
-        return "'" . \addslashes((string) $value) . "'";
+        return $this->quoteString((string) $value);
+    }
+
+    private function quoteString(string $value): string
+    {
+        // PostgreSQL (standard_conforming_strings) no interpreta '\\': se duplica la comilla
+        return $this->driver === 'pgsql'
+            ? "'" . \str_replace("'", "''", $value) . "'"
+            : "'" . \addslashes($value) . "'";
+    }
+
+    private function timestampType(): string
+    {
+        return $this->driver === 'sqlite' ? 'DATETIME' : 'TIMESTAMP';
+    }
+
+    /** PostgreSQL no admite COMMENT inline: se emite COMMENT ON COLUMN aparte. */
+    private function pgComment(string $tableName, string $colName, Column $col): ?string
+    {
+        if ($this->driver !== 'pgsql' || !$col->comment) {
+            return null;
+        }
+        return "COMMENT ON COLUMN `{$tableName}`.`{$colName}` IS " . $this->quoteString($col->comment) . ';';
     }
 
     private function toSnakeCase(string $name): string
@@ -398,7 +457,14 @@ class SchemaBuilder
     private function getExistingColumns(\PDO $pdo, string $tableName): array
     {
         try {
-            if ($this->driver === 'mysql') {
+            if ($this->driver === 'pgsql') {
+                $stmt = $pdo->prepare(
+                    'SELECT column_name FROM information_schema.columns '
+                    . 'WHERE table_schema = current_schema() AND table_name = ?'
+                );
+                $stmt->execute([$tableName]);
+                return $stmt->fetchAll(\PDO::FETCH_COLUMN);
+            } elseif ($this->driver === 'mysql') {
                 $stmt = $pdo->prepare("SHOW COLUMNS FROM `{$tableName}`");
                 $stmt->execute();
                 $columns = $stmt->fetchAll(\PDO::FETCH_ASSOC);
