@@ -1,0 +1,23 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * MikroAPI CLI — run `vendor/bin/mikro list` to see every command.
+ */
+
+declare(strict_types=1);
+
+$autoloadPaths = [
+    __DIR__ . '/../../../autoload.php',  // installed as a dependency (vendor/mikro-api/mikro-api/bin)
+    __DIR__ . '/../vendor/autoload.php', // framework development
+];
+
+foreach ($autoloadPaths as $autoloadPath) {
+    if (file_exists($autoloadPath)) {
+        require_once $autoloadPath;
+        exit((new MikroApi\Console\Application(getcwd()))->run($argv));
+    }
+}
+
+fwrite(STDERR, "Error: could not find vendor/autoload.php — run `composer install` first.\n");
+exit(1);

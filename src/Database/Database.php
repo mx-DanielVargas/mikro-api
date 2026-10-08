@@ -42,7 +42,7 @@ namespace MikroApi\Database;
  * execute) en lugar de getPdo() para que la traducción se aplique.
  *
  * Turso/libSQL (config/database.php) — requiere `composer require turso/libsql`
- * (PHP >= 8.3 + extensión FFI con `ffi.enable=true`; ver MIGRATION_CLI.md):
+ * (PHP >= 8.3 + extensión FFI con `ffi.enable=true`; ver CLI.md):
  *   return [
  *       'driver'        => 'turso',
  *       'database'      => __DIR__ . '/../database/database.sqlite', // réplica local; null si es solo remoto

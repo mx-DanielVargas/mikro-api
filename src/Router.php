@@ -155,6 +155,17 @@ class Router
         }
     }
 
+    /**
+     * Rutas registradas (método, patrón, controlador, acción, guards...).
+     * Lo usa `mikro route:list`.
+     *
+     * @return array<int, array>
+     */
+    public function getRoutes(): array
+    {
+        return $this->routes;
+    }
+
     /** @return string[] */
     private function collectClasses(\ReflectionClass|\ReflectionMethod $ref, string $attrClass, string $prop): array
     {

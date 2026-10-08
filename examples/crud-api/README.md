@@ -14,7 +14,7 @@ real, file-based SQLite database.
 - ✅ Pagination (`paginate($page, $perPage)`)
 - ✅ Database transactions (`Database::getInstance()->transaction(fn () => ...)`)
 - ✅ DTO validation (`#[Required]`, `#[Optional]`, `#[IsString]`, `#[IsInt]`, `#[IsBool]`, `#[IsEmail]`, `#[MinLength]`, `#[MaxLength]`)
-- ✅ Auto-migration on boot (no `mikro-migrate` CLI required)
+- ✅ Auto-migration on boot (no `mikro migrate` CLI step required)
 
 ## Running the Example
 
