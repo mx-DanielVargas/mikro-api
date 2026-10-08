@@ -37,6 +37,9 @@ class Router
 
     private ?Container $container = null;
 
+    /** @var array<string, Container> controlador → container que lo resuelve (módulos) */
+    private array $controllerContainers = [];
+
     private bool $loadedFromCache = false;
 
     /** @var string[] */
@@ -75,8 +78,17 @@ class Router
     /*  Registro                                                            */
     /* ------------------------------------------------------------------ */
 
-    public function registerController(string $controllerClass): void
+    /**
+     * @param Container|null $container Container con el que se resuelven el
+     *        controlador y sus guards/interceptors/filtros (lo usa el sistema
+     *        de módulos). null → el container global del router.
+     */
+    public function registerController(string $controllerClass, ?Container $container = null): void
     {
+        if ($container !== null) {
+            $this->controllerContainers[$controllerClass] = $container;
+        }
+
         if ($this->loadedFromCache) {
             return; // las rutas ya se cargaron desde caché, evitar reflexión redundante
         }
@@ -237,7 +249,7 @@ class Router
                 $request->params[$name] = $matches[$name] ?? null;
             }
 
-            $container = $this->container;
+            $container = $this->containerFor($route['controller']);
             $context   = new ExecutionContext($request, $route['controller'], $route['action']);
             $request->context = $context;
 
@@ -314,6 +326,11 @@ class Router
     /* ------------------------------------------------------------------ */
     /*  Helpers                                                             */
     /* ------------------------------------------------------------------ */
+
+    private function containerFor(string $controllerClass): ?Container
+    {
+        return $this->controllerContainers[$controllerClass] ?? $this->container;
+    }
 
     private function resolve(string $class, ?Container $container = null): object
     {

@@ -65,6 +65,12 @@ class Container
         return isset($this->instances[$id]) || isset($this->factories[$id]);
     }
 
+    /** ¿Ya existe una instancia singleton para este ID? (no la crea) */
+    public function isResolved(string $id): bool
+    {
+        return isset($this->instances[$id]);
+    }
+
     /**
      * Resuelve una dependencia por su ID.
      */

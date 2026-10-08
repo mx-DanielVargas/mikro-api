@@ -5,6 +5,11 @@ namespace MikroApi;
 use MikroApi\Middleware\MiddlewareInterface;
 use MikroApi\Config\ConfigService;
 use MikroApi\Exception\ExceptionHandler;
+use MikroApi\Module\DynamicModule;
+use MikroApi\Module\ModuleLoader;
+use MikroApi\Module\ModuleRef;
+use MikroApi\Module\OnApplicationShutdown;
+use MikroApi\Module\OnModuleInit;
 use MikroApi\Swagger\SwaggerGenerator;
 use MikroApi\Swagger\SwaggerUI;
 
@@ -31,6 +36,10 @@ class App
     /** SwaggerUI listo para despachar, o null si no está habilitado */
     private ?SwaggerUI $swaggerUI = null;
 
+    private ?ModuleLoader $moduleLoader = null;
+
+    private bool $closed = false;
+
     /** Ruta de archivo de caché de rutas pendiente de escribir en run() */
     private ?string $pendingRouteCacheFile = null;
 
@@ -41,9 +50,105 @@ class App
         $this->router->setContainer($this->container);
     }
 
+    /**
+     * Crea la app a partir de un módulo raíz (estilo NestFactory.create).
+     *
+     *   App::create(AppModule::class)->useGlobalFilters(...)->run();
+     */
+    public static function create(string|DynamicModule ...$modules): self
+    {
+        return (new self())->useModule(...$modules);
+    }
+
     public function getContainer(): Container
     {
         return $this->container;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Módulos                                                             */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Carga uno o más módulos (y sus imports), registra sus controladores y
+     * ejecuta los hooks OnModuleInit. Los módulos dinámicos (forRoot) deben
+     * pasarse antes que los módulos que los importan.
+     *
+     *   $app->useModule(ConfigModule::forRoot([...]), AppModule::class);
+     */
+    public function useModule(string|DynamicModule ...$modules): self
+    {
+        $this->moduleLoader ??= new ModuleLoader($this->container);
+
+        $loaded = [];
+        foreach ($modules as $module) {
+            \array_push($loaded, ...$this->moduleLoader->load($module));
+        }
+
+        foreach ($loaded as $ref) {
+            foreach ($ref->controllers as $controller) {
+                $this->controllers[] = $controller;
+                $this->router->registerController($controller, $ref->container);
+            }
+        }
+
+        foreach ($loaded as $ref) {
+            $this->initModule($ref);
+        }
+
+        return $this;
+    }
+
+    /**
+     * Container de un módulo cargado (útil en tests o scripts para obtener
+     * sus providers).
+     */
+    public function getModuleContainer(string $moduleClass): Container
+    {
+        foreach ($this->moduleLoader?->modules() ?? [] as $ref) {
+            if ($ref->class === $moduleClass) {
+                return $ref->container;
+            }
+        }
+        throw new \RuntimeException("El módulo {$moduleClass} no está cargado.");
+    }
+
+    /**
+     * Ejecuta los hooks OnApplicationShutdown de los providers ya
+     * instanciados (orden inverso al de carga). run() lo llama al terminar;
+     * es idempotente.
+     */
+    public function close(): void
+    {
+        if ($this->closed || $this->moduleLoader === null) {
+            return;
+        }
+        $this->closed = true;
+
+        foreach (\array_reverse($this->moduleLoader->modules()) as $ref) {
+            foreach (\array_reverse($ref->providerIds) as $id) {
+                if (!$ref->container->isResolved($id)) continue;
+                $instance = $ref->container->get($id);
+                if ($instance instanceof OnApplicationShutdown) {
+                    $instance->onApplicationShutdown();
+                }
+            }
+            if (\is_subclass_of($ref->class, OnApplicationShutdown::class) && $ref->container->isResolved($ref->class)) {
+                $ref->container->get($ref->class)->onApplicationShutdown();
+            }
+        }
+    }
+
+    private function initModule(ModuleRef $ref): void
+    {
+        foreach ($ref->providerClasses as $id => $class) {
+            if (\is_subclass_of($class, OnModuleInit::class)) {
+                $ref->container->get($id)->onModuleInit();
+            }
+        }
+        if (\is_subclass_of($ref->class, OnModuleInit::class)) {
+            $ref->container->get($ref->class)->onModuleInit();
+        }
     }
 
     /* ------------------------------------------------------------------ */
@@ -225,6 +330,7 @@ class App
     public function run(): void
     {
         $this->handle(Request::capture())->send();
+        $this->close();
     }
 
     /**
