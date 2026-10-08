@@ -10,6 +10,8 @@ class Request
     public array   $query   = [];   // ?foo=bar
     public array   $body    = [];   // JSON / form data
     public ?object $dto     = null; // DTO validado (si se usa #[Body])
+    public mixed   $user    = null; // usuario autenticado (lo setea JwtGuard)
+    public ?ExecutionContext $context = null; // ruta en ejecución (lo setea el Router)
     private array $headers = [];
 
     private function __construct() {}
@@ -54,6 +56,37 @@ class Request
         }
 
         return $req;
+    }
+
+    /**
+     * Construye una Request manualmente (tests, CLI, sub-requests).
+     *
+     * @param array<string, string> $headers
+     */
+    public static function create(
+        string $method,
+        string $path,
+        array $query = [],
+        array $body = [],
+        array $headers = [],
+    ): self {
+        $req         = new self();
+        $req->method = \strtoupper($method);
+        $path        = \parse_url($path, PHP_URL_PATH) ?: '/';
+        $req->path   = '/' . \trim($path, '/');
+        if ($req->path === '//') $req->path = '/';
+        $req->query  = $query;
+        $req->body   = $body;
+        foreach ($headers as $name => $value) {
+            $req->headers[\strtoupper($name)] = $value;
+        }
+        return $req;
+    }
+
+    /** Todos los headers, con nombres en mayúsculas (ej. 'CONTENT-TYPE'). */
+    public function headers(): array
+    {
+        return $this->headers;
     }
 
     /** Obtiene un header (case-insensitive) */

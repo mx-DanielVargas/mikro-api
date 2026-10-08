@@ -6,7 +6,11 @@ use MikroApi\Attributes\ApiDoc;
 use MikroApi\Attributes\ApiTag;
 use MikroApi\Attributes\Body;
 use MikroApi\Attributes\Controller;
+use MikroApi\Attributes\Param;
+use MikroApi\Attributes\PublicRoute;
+use MikroApi\Attributes\Query;
 use MikroApi\Attributes\QueryParam;
+use MikroApi\Attributes\Roles;
 use MikroApi\Attributes\Route;
 use MikroApi\Attributes\UseGuards;
 
@@ -128,11 +132,12 @@ class SwaggerGenerator
             $methodGuards = $this->extractGuards($method->getAttributes(UseGuards::class));
             $allGuards    = \array_merge($classGuards, $methodGuards);
 
-            $dtoClass = null;
-            $bodyAttrs = $method->getAttributes(Body::class);
-            if (!empty($bodyAttrs)) {
-                $dtoClass = $bodyAttrs[0]->newInstance()->dtoClass;
+            // Rutas #[PublicRoute] no requieren autenticación aunque haya guards
+            if ($this->isPublic($ref, $method)) {
+                $allGuards = [];
             }
+
+            $dtoClass = $this->extractBodyDto($method);
 
             // Registrar schema del DTO si existe
             if ($dtoClass !== null) {
@@ -187,7 +192,7 @@ class SwaggerGenerator
         $operation['operationId'] = $this->buildOperationId($tagName, $method->getName());
 
         // Path parameters (:id → {id})
-        $pathParams = $this->extractPathParams($fullPath);
+        $pathParams = $this->extractPathParams($fullPath, $method);
         $queryParams = $this->extractQueryParams($method);
         $allParams = array_merge($pathParams, $queryParams);
         if (!empty($allParams)) {
@@ -213,7 +218,10 @@ class SwaggerGenerator
         }
 
         // Responses
-        $operation['responses'] = $this->buildResponses($apiDoc, $dtoClass, $guards);
+        $operation['responses'] = $this->buildResponses($apiDoc, $dtoClass, $guards, $this->hasTypedParams($method));
+        if (!empty($guards) && $this->hasRoles($method)) {
+            $operation['responses']['403'] ??= ['description' => 'Acceso denegado'];
+        }
 
         return $operation;
     }
@@ -222,7 +230,7 @@ class SwaggerGenerator
     /*  Responses                                                           */
     /* ------------------------------------------------------------------ */
 
-    private function buildResponses(?ApiDoc $apiDoc, ?string $dtoClass, array $guards): array
+    private function buildResponses(?ApiDoc $apiDoc, ?string $dtoClass, array $guards, bool $typedParams = false): array
     {
         // Si el usuario definió responses explícitas, usarlas
         if ($apiDoc !== null && !empty($apiDoc->responses)) {
@@ -243,6 +251,10 @@ class SwaggerGenerator
             // 201 para POST con body
             $responses['201'] = $responses['200'];
             unset($responses['200']);
+        }
+
+        if ($typedParams) {
+            $responses['400'] = ['description' => 'Parámetros inválidos'];
         }
 
         if ($this->hasAuthGuard($guards)) {
@@ -351,14 +363,24 @@ class SwaggerGenerator
         return isset($matches[1]) ? \trim($matches[1]) : null;
     }
 
-    private function extractPathParams(string $path): array
+    private function extractPathParams(string $path, ?\ReflectionMethod $method = null): array
     {
         \preg_match_all('/:([a-zA-Z_][a-zA-Z0-9_]*)/', $path, $matches);
+
+        // Tipos declarados con #[Param('x')] int $x
+        $types = [];
+        foreach ($method?->getParameters() ?? [] as $param) {
+            $attrs = $param->getAttributes(Param::class);
+            if (!empty($attrs) && ($name = $attrs[0]->newInstance()->name) !== null) {
+                $types[$name] = $this->openApiType($param->getType());
+            }
+        }
+
         return \array_map(fn($name) => [
             'name'     => $name,
             'in'       => 'path',
             'required' => true,
-            'schema'   => ['type' => 'string'],
+            'schema'   => $types[$name] ?? ['type' => 'string'],
         ], $matches[1]);
     }
 
@@ -382,7 +404,120 @@ class SwaggerGenerator
             }
             $params[] = $param;
         }
+
+        // #[Query('x')] tipado o #[Query] DtoClass en los parámetros del método
+        $documented = \array_column($params, 'name');
+        foreach ($method->getParameters() as $refParam) {
+            $attrs = $refParam->getAttributes(Query::class);
+            if (empty($attrs)) continue;
+
+            $name = $attrs[0]->newInstance()->name;
+            $type = $refParam->getType();
+
+            if ($name === null) {
+                $typeName = $type instanceof \ReflectionNamedType ? $type->getName() : null;
+                if ($typeName === null || $type->isBuiltin() || !\class_exists($typeName)) continue;
+
+                $schema = $this->schemaBuilder->build($typeName);
+                foreach ($schema['properties'] ?? [] as $prop => $propSchema) {
+                    if (\in_array($prop, $documented, true)) continue;
+                    $params[] = [
+                        'name'     => $prop,
+                        'in'       => 'query',
+                        'required' => \in_array($prop, $schema['required'] ?? [], true),
+                        'schema'   => $propSchema,
+                    ];
+                }
+                continue;
+            }
+
+            if (\in_array($name, $documented, true)) continue; // #[QueryParam] manda
+            $params[] = [
+                'name'     => $name,
+                'in'       => 'query',
+                'required' => !$refParam->isDefaultValueAvailable() && !($type?->allowsNull() ?? true),
+                'schema'   => $this->openApiType($type),
+            ];
+        }
+
         return $params;
+    }
+
+    /** DTO del body: #[Body(Dto::class)] en el método o #[Body] Dto $dto en un parámetro. */
+    private function extractBodyDto(\ReflectionMethod $method): ?string
+    {
+        $bodyAttrs = $method->getAttributes(Body::class);
+        if (!empty($bodyAttrs)) {
+            return $bodyAttrs[0]->newInstance()->dtoClass;
+        }
+
+        foreach ($method->getParameters() as $param) {
+            $attrs = $param->getAttributes(Body::class);
+            if (empty($attrs)) continue;
+
+            $explicit = $attrs[0]->newInstance()->dtoClass;
+            if ($explicit !== null && \class_exists($explicit)) {
+                return $explicit;
+            }
+
+            $type = $param->getType();
+            if ($explicit === null && $type instanceof \ReflectionNamedType && !$type->isBuiltin()
+                && \class_exists($type->getName())) {
+                return $type->getName();
+            }
+        }
+
+        return null;
+    }
+
+    /** ¿Algún #[Param]/#[Query] tipado que pueda responder 400 por conversión? */
+    private function hasTypedParams(\ReflectionMethod $method): bool
+    {
+        foreach ($method->getParameters() as $param) {
+            if (empty($param->getAttributes(Param::class)) && empty($param->getAttributes(Query::class))) continue;
+            $type = $param->getType();
+            if ($type instanceof \ReflectionNamedType && \in_array($type->getName(), ['int', 'float', 'bool'], true)) {
+                return true;
+            }
+            if ($type instanceof \ReflectionNamedType && \enum_exists($type->getName())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function isPublic(\ReflectionClass $class, \ReflectionMethod $method): bool
+    {
+        return !empty($method->getAttributes(PublicRoute::class))
+            || !empty($class->getAttributes(PublicRoute::class));
+    }
+
+    private function hasRoles(\ReflectionMethod $method): bool
+    {
+        return !empty($method->getAttributes(Roles::class))
+            || !empty($method->getDeclaringClass()->getAttributes(Roles::class));
+    }
+
+    /** Tipo PHP → schema OpenAPI */
+    private function openApiType(?\ReflectionType $type): array
+    {
+        if (!$type instanceof \ReflectionNamedType) {
+            return ['type' => 'string'];
+        }
+
+        $name = $type->getName();
+        if (\enum_exists($name) && \is_subclass_of($name, \BackedEnum::class)) {
+            $values = \array_map(fn($c) => $c->value, $name::cases());
+            return ['type' => \is_int($values[0] ?? null) ? 'integer' : 'string', 'enum' => $values];
+        }
+
+        return match ($name) {
+            'int'   => ['type' => 'integer'],
+            'float' => ['type' => 'number'],
+            'bool'  => ['type' => 'boolean'],
+            'array' => ['type' => 'array', 'items' => ['type' => 'string']],
+            default => ['type' => 'string'],
+        };
     }
 
     private function hasAuthGuard(array $guards): bool

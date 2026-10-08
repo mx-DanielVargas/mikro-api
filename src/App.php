@@ -4,6 +4,12 @@ namespace MikroApi;
 
 use MikroApi\Middleware\MiddlewareInterface;
 use MikroApi\Config\ConfigService;
+use MikroApi\Exception\ExceptionHandler;
+use MikroApi\Module\DynamicModule;
+use MikroApi\Module\ModuleLoader;
+use MikroApi\Module\ModuleRef;
+use MikroApi\Module\OnApplicationShutdown;
+use MikroApi\Module\OnModuleInit;
 use MikroApi\Swagger\SwaggerGenerator;
 use MikroApi\Swagger\SwaggerUI;
 
@@ -18,8 +24,21 @@ class App
     /** @var MiddlewareInterface[] */
     private array $middlewares = [];
 
+    /** @var string[] */
+    private array $globalGuards = [];
+
+    /** @var string[] */
+    private array $globalInterceptors = [];
+
+    /** @var string[] */
+    private array $globalFilters = [];
+
     /** SwaggerUI listo para despachar, o null si no está habilitado */
     private ?SwaggerUI $swaggerUI = null;
+
+    private ?ModuleLoader $moduleLoader = null;
+
+    private bool $closed = false;
 
     /** Ruta de archivo de caché de rutas pendiente de escribir en run() */
     private ?string $pendingRouteCacheFile = null;
@@ -31,9 +50,105 @@ class App
         $this->router->setContainer($this->container);
     }
 
+    /**
+     * Crea la app a partir de un módulo raíz (estilo NestFactory.create).
+     *
+     *   App::create(AppModule::class)->useGlobalFilters(...)->run();
+     */
+    public static function create(string|DynamicModule ...$modules): self
+    {
+        return (new self())->useModule(...$modules);
+    }
+
     public function getContainer(): Container
     {
         return $this->container;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Módulos                                                             */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Carga uno o más módulos (y sus imports), registra sus controladores y
+     * ejecuta los hooks OnModuleInit. Los módulos dinámicos (forRoot) deben
+     * pasarse antes que los módulos que los importan.
+     *
+     *   $app->useModule(ConfigModule::forRoot([...]), AppModule::class);
+     */
+    public function useModule(string|DynamicModule ...$modules): self
+    {
+        $this->moduleLoader ??= new ModuleLoader($this->container);
+
+        $loaded = [];
+        foreach ($modules as $module) {
+            \array_push($loaded, ...$this->moduleLoader->load($module));
+        }
+
+        foreach ($loaded as $ref) {
+            foreach ($ref->controllers as $controller) {
+                $this->controllers[] = $controller;
+                $this->router->registerController($controller, $ref->container);
+            }
+        }
+
+        foreach ($loaded as $ref) {
+            $this->initModule($ref);
+        }
+
+        return $this;
+    }
+
+    /**
+     * Container de un módulo cargado (útil en tests o scripts para obtener
+     * sus providers).
+     */
+    public function getModuleContainer(string $moduleClass): Container
+    {
+        foreach ($this->moduleLoader?->modules() ?? [] as $ref) {
+            if ($ref->class === $moduleClass) {
+                return $ref->container;
+            }
+        }
+        throw new \RuntimeException("El módulo {$moduleClass} no está cargado.");
+    }
+
+    /**
+     * Ejecuta los hooks OnApplicationShutdown de los providers ya
+     * instanciados (orden inverso al de carga). run() lo llama al terminar;
+     * es idempotente.
+     */
+    public function close(): void
+    {
+        if ($this->closed || $this->moduleLoader === null) {
+            return;
+        }
+        $this->closed = true;
+
+        foreach (\array_reverse($this->moduleLoader->modules()) as $ref) {
+            foreach (\array_reverse($ref->providerIds) as $id) {
+                if (!$ref->container->isResolved($id)) continue;
+                $instance = $ref->container->get($id);
+                if ($instance instanceof OnApplicationShutdown) {
+                    $instance->onApplicationShutdown();
+                }
+            }
+            if (\is_subclass_of($ref->class, OnApplicationShutdown::class) && $ref->container->isResolved($ref->class)) {
+                $ref->container->get($ref->class)->onApplicationShutdown();
+            }
+        }
+    }
+
+    private function initModule(ModuleRef $ref): void
+    {
+        foreach ($ref->providerClasses as $id => $class) {
+            if (\is_subclass_of($class, OnModuleInit::class)) {
+                $ref->container->get($id)->onModuleInit();
+            }
+        }
+        if (\is_subclass_of($ref->class, OnModuleInit::class)) {
+            $ref->container->get($ref->class)->onModuleInit();
+        }
     }
 
     /* ------------------------------------------------------------------ */
@@ -45,6 +160,40 @@ class App
         foreach ($middlewares as $mw) {
             $this->middlewares[] = $mw;
         }
+        return $this;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Guards, interceptors y filtros globales                             */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Guards que se ejecutan en todas las rutas, antes que los de clase y método.
+     * Combínalo con #[PublicRoute] para excluir rutas de un JwtGuard global.
+     */
+    public function useGlobalGuards(string ...$guards): self
+    {
+        \array_push($this->globalGuards, ...$guards);
+        $this->router->setGlobalGuards($this->globalGuards);
+        return $this;
+    }
+
+    /** Interceptors que envuelven todas las rutas (los más externos). */
+    public function useGlobalInterceptors(string ...$interceptors): self
+    {
+        \array_push($this->globalInterceptors, ...$interceptors);
+        $this->router->setGlobalInterceptors($this->globalInterceptors);
+        return $this;
+    }
+
+    /**
+     * Filtros de excepciones globales. Se prueban después de los de método
+     * y clase, y también atienden errores de middlewares y 404/405.
+     */
+    public function useGlobalFilters(string ...$filters): self
+    {
+        \array_push($this->globalFilters, ...$filters);
+        $this->router->setGlobalFilters($this->globalFilters);
         return $this;
     }
 
@@ -180,14 +329,22 @@ class App
 
     public function run(): void
     {
+        $this->handle(Request::capture())->send();
+        $this->close();
+    }
+
+    /**
+     * Procesa una petición por el pipeline completo (middlewares → docs |
+     * router) y retorna la respuesta sin enviarla. Útil para tests.
+     */
+    public function handle(Request $request): Response
+    {
         if ($this->pendingRouteCacheFile !== null) {
             $this->router->cacheTo($this->pendingRouteCacheFile);
             $this->pendingRouteCacheFile = null;
         }
 
         try {
-            $request = Request::capture();
-
             // Construir pipeline: middlewares → (docs | router dispatch)
             // El chequeo de rutas de documentación vive dentro del pipeline
             // para que CORS, rate limiting, etc. también se apliquen a /docs
@@ -206,16 +363,15 @@ class App
                 $core,
             );
 
-            $response = $pipeline($request);
-            $response->send();
+            return $pipeline($request);
 
-        } catch (\MikroApi\Service\ServiceException $e) {
-            Response::error($e->getMessage(), $e->getStatusCode())->send();
         } catch (\Throwable $e) {
-            $message = $this->isProduction()
-                ? 'Internal Server Error'
-                : $e->getMessage();
-            Response::error($message, 500)->send();
+            // Excepciones fuera de una ruta (middlewares) → filtros globales
+            try {
+                return ExceptionHandler::handle($e, $request, null, $this->globalFilters, $this->container);
+            } catch (\Throwable $filterError) {
+                return ExceptionHandler::defaultResponse($filterError);
+            }
         }
     }
 
@@ -229,13 +385,7 @@ class App
      */
     private function isProduction(): bool
     {
-        $env = $_ENV['APP_ENV'] ?? $_SERVER['APP_ENV'] ?? null;
-
-        if ($env === null) {
-            $fromGetenv = getenv('APP_ENV');
-            $env = $fromGetenv !== false ? $fromGetenv : null;
-        }
-
-        return $env === 'production';
+        return ExceptionHandler::isProduction();
     }
+
 }

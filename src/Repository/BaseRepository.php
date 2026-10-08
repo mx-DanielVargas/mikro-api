@@ -193,12 +193,18 @@ abstract class BaseRepository implements RepositoryInterface, ContainerAwareInte
         $columns = \implode('`, `', \array_keys($data));
         $holders = \implode(', ', \array_fill(0, \count($data), '?'));
 
-        $stmt = $this->db->getPdo()->prepare(
-            "INSERT INTO `{$this->table}` (`{$columns}`) VALUES ({$holders})"
-        );
-        $stmt->execute(\array_values($data));
+        $sql = "INSERT INTO `{$this->table}` (`{$columns}`) VALUES ({$holders})";
 
-        $id = $this->db->lastInsertId();
+        if ($this->db->getDriver() === 'pgsql') {
+            // PostgreSQL: RETURNING evita depender de lastval(), que falla
+            // con PKs no autoincrementales (UUID, claves naturales).
+            $row = $this->db->statement("{$sql} RETURNING `{$this->primaryKey}`", \array_values($data))
+                ->fetch(\PDO::FETCH_ASSOC);
+            $id  = (string) ($row[$this->primaryKey] ?? '');
+        } else {
+            $this->db->statement($sql, \array_values($data));
+            $id = $this->db->lastInsertId();
+        }
 
         if (!$reload) {
             $normalizedId = \ctype_digit($id) ? (int) $id : $id;
@@ -221,10 +227,10 @@ abstract class BaseRepository implements RepositoryInterface, ContainerAwareInte
         $set    = \implode(', ', \array_map(fn($c) => "`{$c}` = ?", \array_keys($data)));
         $params = \array_merge(\array_values($data), [$id]);
 
-        $stmt = $this->db->getPdo()->prepare(
-            "UPDATE `{$this->table}` SET {$set} WHERE `{$this->primaryKey}` = ?"
+        $this->db->statement(
+            "UPDATE `{$this->table}` SET {$set} WHERE `{$this->primaryKey}` = ?",
+            $params,
         );
-        $stmt->execute($params);
 
         return $this->findById($id);
     }
@@ -234,28 +240,28 @@ abstract class BaseRepository implements RepositoryInterface, ContainerAwareInte
         if ($this->useSoftDeletes) {
             return $this->softDelete($id);
         }
-        $stmt = $this->db->getPdo()->prepare(
-            "DELETE FROM `{$this->table}` WHERE `{$this->primaryKey}` = ?"
+        $stmt = $this->db->statement(
+            "DELETE FROM `{$this->table}` WHERE `{$this->primaryKey}` = ?",
+            [$id],
         );
-        $stmt->execute([$id]);
         return $stmt->rowCount() > 0;
     }
 
     public function softDelete(mixed $id): bool
     {
-        $stmt = $this->db->getPdo()->prepare(
-            "UPDATE `{$this->table}` SET `{$this->softDeleteColumn}` = CURRENT_TIMESTAMP WHERE `{$this->primaryKey}` = ?"
+        $stmt = $this->db->statement(
+            "UPDATE `{$this->table}` SET `{$this->softDeleteColumn}` = CURRENT_TIMESTAMP WHERE `{$this->primaryKey}` = ?",
+            [$id],
         );
-        $stmt->execute([$id]);
         return $stmt->rowCount() > 0;
     }
 
     public function restore(mixed $id): ?array
     {
-        $stmt = $this->db->getPdo()->prepare(
-            "UPDATE `{$this->table}` SET `{$this->softDeleteColumn}` = NULL WHERE `{$this->primaryKey}` = ?"
+        $stmt = $this->db->statement(
+            "UPDATE `{$this->table}` SET `{$this->softDeleteColumn}` = NULL WHERE `{$this->primaryKey}` = ?",
+            [$id],
         );
-        $stmt->execute([$id]);
         return $this->findById($id);
     }
 

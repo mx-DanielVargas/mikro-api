@@ -46,7 +46,14 @@ abstract class Migration
         try {
             $driver = $this->schema->getDriver();
             
-            if ($driver === 'mysql') {
+            if ($driver === 'pgsql') {
+                $stmt = $this->pdo->prepare(
+                    'SELECT 1 FROM information_schema.tables '
+                    . 'WHERE table_schema = current_schema() AND table_name = ?'
+                );
+                $stmt->execute([$tableName]);
+                return $stmt->fetch() !== false;
+            } elseif ($driver === 'mysql') {
                 $stmt = $this->pdo->prepare("SHOW TABLES LIKE ?");
                 $stmt->execute([$tableName]);
                 return $stmt->fetch() !== false;
