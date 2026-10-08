@@ -5,12 +5,18 @@
 ## Features
 
 - Attribute-Based Routing
-- Automatic DTO Validation
-- Built-in JWT Authentication
+- Modules with encapsulated providers, dynamic modules and lifecycle hooks
+- Handler parameter injection (`#[Param]`, `#[Query]`, `#[Body]`, `#[Headers]`, `#[CurrentUser]`) with automatic type conversion
+- Automatic DTO Validation (body, query string and route params)
+- Built-in JWT Authentication (`JwtService`, `JwtGuard`) and role-based authorization (`#[Roles]`, `RolesGuard`)
+- Guards, Interceptors and Exception Filters (per method, per controller or global)
+- Custom route metadata (`#[SetMetadata]`) readable through `Reflector`
+- `HttpException` hierarchy with automatic JSON responses, `405 Method Not Allowed` with `Allow` header
 - Dependency Injection Container with Autowiring
 - Middleware Pipeline (CORS, Rate Limiting, JSON Body validation)
 - Immutable Response Objects
 - Repository Pattern with Query Builder & SQL Injection Protection
+- SQLite, MySQL/MariaDB, PostgreSQL and Turso/libSQL
 - Database Transactions
 - Attribute-Driven Migrations
 - Zero External Dependencies
@@ -18,6 +24,7 @@
 - Template Engine with Layouts, Sections & Includes
 - Swagger Documentation with Query Parameters
 - Soft Deletes Support
+- `mikro` CLI: project scaffolding and generators for every building block (including full CRUD resources)
 
 ## Installation
 
@@ -278,24 +285,174 @@ public function create(Request $req): Response
 }
 ```
 
-## Authentication
+## Parameter Injection
+
+Handlers can declare exactly what they need instead of reading `$req` (the classic `function (Request $req)` signature keeps working). Scalar types are converted automatically; a value that can't be converted returns `400`, and DTOs are validated (`422` on failure).
 
 ```php
-use MikroApi\Attributes\UseGuards;
-use App\Guards\JwtGuard;
+use MikroApi\Attributes\{Param, Query, Body, Headers, CurrentUser};
 
-#[Controller('/api/admin')]
-#[UseGuards(JwtGuard::class)]
-class AdminController
+enum Status: string { case Active = 'active'; case Archived = 'archived'; }
+
+#[Controller('/api/products')]
+class ProductController
 {
-    #[Route('GET', '/users')]
-    public function users(Request $req): Response
-    {
-        $auth = $req->params['_auth'];
-        return Response::json(['user' => $auth]);
+    #[Route('GET', '/')]
+    public function index(
+        #[Query('page')] int $page = 1,                 // ?page=3 → 3 (int); missing → default
+        #[Query('status')] Status $status = Status::Active, // backed enums are supported (400 if invalid)
+        #[Query('q')] ?string $q = null,                // nullable → null when missing
+    ): array {
+        return [...];                                   // non-Response values are sent as JSON
     }
+
+    #[Route('GET', '/search')]
+    public function search(#[Query] SearchQuery $query): array { ... } // whole query string validated against a DTO
+
+    #[Route('PUT', '/:id')]
+    public function update(
+        #[Param('id')] int $id,                         // "abc" → 400
+        #[Body] UpdateProductDto $dto,                  // validated body (also available as $req->dto)
+        #[Headers('X-Tenant')] ?string $tenant,
+        #[CurrentUser('sub')] int $userId,              // from $request->user (set by JwtGuard)
+        Request $req,                                   // the Request is still injectable
+    ): array { ... }
 }
 ```
+
+| Attribute | Source | Without a name |
+|---|---|---|
+| `#[Param('id')]` | route params | all params (`array`) or a validated DTO |
+| `#[Query('page')]` | query string | whole query (`array`) or a validated DTO |
+| `#[Body('email')]` | body field | `#[Body] Dto $dto` validated DTO, `#[Body] array $body` raw body |
+| `#[Headers('X-Tenant')]` | headers (case-insensitive) | all headers (`array`) |
+| `#[CurrentUser('sub')]` | `$request->user` | the whole user (401 if missing and not nullable) |
+
+Also injectable by type: `Request` and `ExecutionContext`. Supported conversions: `int`, `float`, `bool`, `string`, `array` and backed/pure enums. An empty value (`?page=`) counts as missing for non-string types. A parameter that can't be injected throws `LogicException` when the controller is registered.
+
+## Authentication
+
+MikroAPI ships a dependency-free JWT implementation (HS256/HS384/HS512).
+
+```php
+use MikroApi\Auth\{JwtService, JwtGuard, RolesGuard};
+use MikroApi\Attributes\{UseGuards, Roles, PublicRoute};
+
+// Bootstrap: the secret can't be autowired, register the service explicitly
+$app->getContainer()->singleton(JwtService::class, fn() => new JwtService(
+    secret: $config->getOrThrow('JWT_SECRET'),
+    ttl:    3600,          // seconds, 0 = no expiration
+    // algorithm: 'HS256', leeway: 0, issuer: null
+));
+
+#[Controller('/auth')]
+class AuthController
+{
+    public function __construct(private JwtService $jwt) {}
+
+    #[Route('POST', '/login')]
+    #[PublicRoute]                                     // skipped by JwtGuard
+    public function login(#[Body] LoginDto $dto): array
+    {
+        // ... check credentials ...
+        return ['token' => $this->jwt->sign(['sub' => $user['id'], 'roles' => ['admin']])];
+    }
+}
+
+#[Controller('/api/admin')]
+#[UseGuards(JwtGuard::class, RolesGuard::class)]
+class AdminController
+{
+    #[Route('GET', '/me')]
+    public function me(#[CurrentUser] array $user): array
+    {
+        return $user;                                  // the verified JWT payload
+    }
+
+    #[Route('DELETE', '/users/:id')]
+    #[Roles('admin')]                                  // RolesGuard → 403 without the role
+    public function delete(#[Param('id')] int $id): Response { ... }
+}
+```
+
+- `JwtGuard` reads `Authorization: Bearer <token>`, verifies signature, `exp`, `nbf` (and `iss` if configured) and stores the payload in `$request->user`. Failures return `401` with the reason (`Token no proporcionado`, `Token expirado`, `Token inválido`). Tokens signed with a different algorithm (including `none`) are rejected.
+- `RolesGuard` compares `#[Roles(...)]` (method, or class if the method has none) against `$request->user['roles']` (array) or `['role']` (string). Having any one of the roles is enough.
+- To protect everything by default, register it globally and opt out with `#[PublicRoute]`:
+
+```php
+$app->useGlobalGuards(JwtGuard::class, RolesGuard::class);
+```
+
+Custom guards keep implementing `GuardInterface` (`canActivate(Request)` + `deny()`); they can also throw any `HttpException` to respond with a specific status and message.
+
+### Custom Metadata (`SetMetadata` + `Reflector`)
+
+Guards, interceptors and filters can read metadata from the current route through `$request->context` (an `ExecutionContext`) and `Reflector`:
+
+```php
+use MikroApi\Attributes\SetMetadata;
+use MikroApi\Reflector;
+
+#[\Attribute(\Attribute::TARGET_CLASS | \Attribute::TARGET_METHOD)]
+class Permissions extends SetMetadata
+{
+    public function __construct(string ...$perms) { parent::__construct('permissions', $perms); }
+}
+
+class PermissionsGuard extends BaseGuard
+{
+    public function __construct(private Reflector $reflector) {}
+
+    public function canActivate(Request $request): bool
+    {
+        $required = $this->reflector->getAllAndOverride('permissions', $request->context) ?? [];
+        return empty(array_diff($required, $request->user['permissions'] ?? []));
+    }
+}
+
+#[Permissions('users:write')]
+#[Route('PUT', '/:id')]
+public function update(...) { ... }
+```
+
+`Reflector` methods: `getAllAndOverride($key, $ctx)` (method value, else class value), `getAllAndMerge($key, $ctx)` (both, flattened), `getHandlerMetadata`, `getClassMetadata`, `has`, and `getAttribute(SomeAttribute::class, $ctx)` for any attribute class. `#[SetMetadata('key', $value)]` can also be used directly.
+
+## Interceptors
+
+Interceptors wrap the handler: they run after guards, before parameter validation, and can act before/after the handler, transform its result or short-circuit it.
+
+```php
+use MikroApi\Interceptor\InterceptorInterface;
+use MikroApi\ExecutionContext;
+
+class TimingInterceptor implements InterceptorInterface
+{
+    public function intercept(ExecutionContext $context, callable $next): mixed
+    {
+        $start  = microtime(true);
+        $result = $next();                         // rest of the chain + handler
+        $ms     = round((microtime(true) - $start) * 1000, 2);
+
+        $response = $result instanceof Response ? $result : Response::json($result);
+        return $response->withHeader('X-Response-Time', "{$ms}ms");
+    }
+}
+
+class WrapDataInterceptor implements InterceptorInterface
+{
+    public function intercept(ExecutionContext $context, callable $next): mixed
+    {
+        return ['data' => $next()];               // transform the raw handler result
+    }
+}
+
+#[UseInterceptors(TimingInterceptor::class)]       // class or method level
+class ProductController { ... }
+
+$app->useGlobalInterceptors(TimingInterceptor::class);
+```
+
+Order (outermost first): global → controller → method. Request pipeline: middlewares → guards → interceptors → parameter validation/injection → handler; exceptions from any of these go through the exception filters.
 
 ## Swagger Documentation
 
@@ -391,12 +548,12 @@ $app->enableSwagger(
 
 Swagger automatically detects:
 - ✅ Route paths and HTTP methods
-- ✅ Path parameters (`:id` → `{id}`)
-- ✅ Query parameters from `#[QueryParam]`
-- ✅ Request body schemas from DTOs
+- ✅ Path parameters (`:id` → `{id}`), typed from `#[Param('id')] int $id`
+- ✅ Query parameters from `#[QueryParam]`, typed `#[Query('page')]` parameters and `#[Query] Dto` properties
+- ✅ Request body schemas from DTOs (`#[Body(Dto::class)]` on the method or `#[Body] Dto $dto` on a parameter)
 - ✅ Validation rules as schema constraints
-- ✅ Authentication requirements from guards
-- ✅ Response codes (200, 201, 401, 422, etc.)
+- ✅ Authentication requirements from guards (routes marked `#[PublicRoute]` are documented without security)
+- ✅ Response codes (200, 201, 400, 401, 403, 422, etc.)
 
 ## Repository Pattern
 
@@ -462,31 +619,29 @@ $repo->with('posts.comments')->findById(1);
 
 Relations respect soft deletes automatically.
 
+## CLI
+
+`vendor/bin/mikro` scaffolds projects, generates every building block and runs migrations. Full reference: [`CLI.md`](./CLI.md).
+
+```bash
+vendor/bin/mikro new                              # modular project: AppModule + ConfigModule, .env with JWT_SECRET, Swagger at /docs
+vendor/bin/mikro make:resource products           # module + CRUD controller + service + repository + DTOs + migration, registered in AppModule
+vendor/bin/mikro g controller Invoice --module=Billing   # generate inside a module and register it there
+vendor/bin/mikro make:guard Admin                 # also: module, service, repository, dto, interceptor, filter,
+                                                  #       middleware, attribute, migration, view, test
+vendor/bin/mikro migrate                          # migrate:status | migrate:rollback | migrate:reset | migrate:fresh
+vendor/bin/mikro route:list                       # every route with its guards/interceptors
+vendor/bin/mikro docs:export openapi.json         # OpenAPI spec without running the server
+vendor/bin/mikro key:generate                     # random JWT_SECRET in .env
+vendor/bin/mikro serve                            # dev server
+```
+
 ## Migrations
-
-### Scaffold a New Project
-
-```bash
-vendor/bin/mikro-migrate init
-```
-
-Generates a ready-to-run project structure (`public/index.php`, `src/Controllers|Repositories|DTOs|Middleware|Guards|Services`, `config/database.php`, a starter migration, `.env`, `composer.json`...). Safe to re-run — never overwrites existing files. See [`MIGRATION_CLI.md`](./MIGRATION_CLI.md) for the full structure it creates.
-
-### Generate Code
-
-```bash
-vendor/bin/mikro-migrate make:controller Product
-vendor/bin/mikro-migrate make:repository Product
-vendor/bin/mikro-migrate make:dto CreateProduct
-vendor/bin/mikro-migrate make:middleware RequestId
-vendor/bin/mikro-migrate make:guard Jwt
-vendor/bin/mikro-migrate make:service Product
-```
 
 ### Create Migration
 
 ```bash
-vendor/bin/mikro-migrate make create_users_table
+vendor/bin/mikro make:migration create_users_table
 ```
 
 ### Define Schema
@@ -520,10 +675,11 @@ class CreateUsersTable extends Migration
 ### Run Migrations
 
 ```bash
-vendor/bin/mikro-migrate migrate      # Run pending
-vendor/bin/mikro-migrate rollback     # Rollback last
-vendor/bin/mikro-migrate status       # Check status
-vendor/bin/mikro-migrate reset        # Reset all
+vendor/bin/mikro migrate              # Run pending
+vendor/bin/mikro migrate:rollback     # Rollback last
+vendor/bin/mikro migrate:status       # Check status
+vendor/bin/mikro migrate:reset        # Reset all
+vendor/bin/mikro migrate:fresh        # Reset + migrate
 ```
 
 ## Database Configuration
@@ -552,6 +708,31 @@ return [
     'database' => __DIR__ . '/../database/database.sqlite',
 ];
 ```
+
+### PostgreSQL
+
+Requires the `pdo_pgsql` extension. The driver also accepts `'postgres'` / `'postgresql'`.
+
+```php
+<?php
+return [
+    'driver'   => 'pgsql',
+    'host'     => $_ENV['DB_HOST'] ?? 'localhost',
+    'port'     => 5432,
+    'database' => $_ENV['DB_DATABASE'] ?? 'myapp',
+    'username' => $_ENV['DB_USERNAME'] ?? 'postgres',
+    'password' => $_ENV['DB_PASSWORD'] ?? '',
+    'schema'   => 'public',   // optional, sets search_path
+    'sslmode'  => 'prefer',   // optional
+];
+```
+
+Repositories, the query builder, relations and migrations work unchanged:
+
+- Identifiers are written with backticks internally and translated to `"double quotes"` for PostgreSQL (string literals are left untouched). If you write raw SQL, use `Database::query()/queryOne()/statement()/execute()` rather than `getPdo()` so the translation applies.
+- Migrations: auto-increment keys become `GENERATED BY DEFAULT AS IDENTITY`, `boolean` → `BOOLEAN`, `json` → `JSONB`, `uuid` → `UUID`, `decimal` → `NUMERIC`, `datetime` → `TIMESTAMP`, column/table comments → `COMMENT ON`. `ALTER TABLE` migrations work as with MySQL.
+- `BaseRepository::create()` uses `INSERT ... RETURNING` (works with UUID/natural keys). PHP booleans are bound as `1`/`0`, which PostgreSQL accepts for both `BOOLEAN` and integer columns.
+- `updated_at` has no `ON UPDATE` in PostgreSQL; `BaseRepository::update()` sets it (same as SQLite).
 
 ### Turso / libSQL
 
@@ -700,6 +881,8 @@ $app->useConfig(__DIR__); // loads .env from project root
 
 This loads your `.env` file and registers `ConfigService` in the container for injection.
 
+When the app is organized in modules, use `ConfigModule::forRoot()` instead (same `ConfigService`, plus namespaced `load` and startup `validate`) — see [Modules](#modules). Keys not present in `.env` fall back to the real process environment.
+
 ### .env File
 
 ```env
@@ -771,6 +954,53 @@ $config->validate(['DB_HOST', 'DB_NAME', 'JWT_SECRET']);
 
 ## Error Handling
 
+### HTTP Exceptions
+
+Throw an `HttpException` from anywhere (controller, service, guard, interceptor, middleware) and it becomes a JSON response with its status code:
+
+```php
+use MikroApi\Exception\{NotFoundException, ConflictException, HttpException};
+
+throw new NotFoundException('Product not found');           // 404 {"error":"Product not found"}
+throw new ConflictException('Email already registered');     // 409
+throw new HttpException('Payment required', 402, body: ['code' => 'PAYMENT'], headers: ['Retry-After' => '60']);
+```
+
+Available: `BadRequestException` (400), `UnauthorizedException` (401), `ForbiddenException` (403), `NotFoundException` (404), `MethodNotAllowedException` (405), `ConflictException` (409), `UnprocessableEntityException` (422), `ValidationException` (422, `{"error":"Validation failed","errors":{...}}`), `TooManyRequestsException` (429), `InternalServerErrorException` (500). `ServiceException` (used by `BaseService`) now extends `HttpException`.
+
+Unknown paths return `404`; a known path with the wrong method returns `405` with an `Allow` header.
+
+### Exception Filters
+
+Filters turn exceptions into custom responses. Declare which exceptions a filter handles with `#[Catches]` (none = all of them); return `null` to let the next filter (or the default handler) deal with it.
+
+```php
+use MikroApi\Attributes\{Catches, UseFilters};
+use MikroApi\Exception\{ExceptionFilterInterface, HttpException};
+
+#[Catches(HttpException::class)]
+class ApiErrorFilter implements ExceptionFilterInterface
+{
+    public function catch(\Throwable $e, Request $request, ?ExecutionContext $context): ?Response
+    {
+        return Response::json([
+            'statusCode' => $e->getStatusCode(),
+            'message'    => $e->getMessage(),
+            'path'       => $request->path,
+        ], $e->getStatusCode());
+    }
+}
+
+#[UseFilters(ApiErrorFilter::class)]               // class or method level
+class ProductController { ... }
+
+$app->useGlobalFilters(ApiErrorFilter::class);     // also catches 404/405 and middleware errors
+```
+
+Filters are tried from the most specific to the most general: method → controller → global. `$context` is `null` for errors outside a route (middlewares, 404/405).
+
+### Production Mode
+
 In production, set `APP_ENV=production` to hide internal error details:
 
 ```php
@@ -778,7 +1008,103 @@ In production, set `APP_ENV=production` to hide internal error details:
 APP_ENV=production
 ```
 
-In development, full error messages are returned. In production, only `"Internal Server Error"` is shown for unhandled exceptions. `ServiceException` messages are always returned with their status code.
+In development, full error messages are returned. In production, only `"Internal Server Error"` is shown for unhandled (non-HTTP) exceptions. `HttpException`/`ServiceException` messages are always returned with their status code.
+
+## Modules
+
+Modules group controllers and providers and control what's visible to the rest of the app, like NestJS modules.
+
+```php
+use MikroApi\Attributes\Module;
+
+#[Module(
+    imports:     [DatabaseModule::class],
+    controllers: [UserController::class],
+    providers:   [
+        UserService::class,                                            // class → singleton within the module
+        ['provide' => UserRepositoryInterface::class, 'useClass' => SqlUserRepository::class],
+        ['provide' => 'users.pageSize', 'useValue' => 20],
+        ['provide' => Mailer::class, 'useFactory' => [MailerFactory::class, 'create'], 'inject' => [ConfigService::class]],
+        ['provide' => 'mailer', 'useExisting' => Mailer::class],      // alias
+    ],
+    exports:     [UserService::class],
+)]
+class UsersModule {}
+
+#[Module(imports: [UsersModule::class, HealthModule::class])]
+class AppModule {}
+
+App::create(AppModule::class)       // or (new App())->useModule(AppModule::class)
+    ->useGlobalFilters(ApiErrorFilter::class)
+    ->run();
+```
+
+Resolution rules inside a module: its own providers → providers exported by the modules it imports → exports of `global: true` modules → anything registered directly in `$app->getContainer()` (so the classic bootstrap keeps working) → autowiring. Asking for a provider that belongs to another module which doesn't export it (or isn't imported) fails with an explanatory error. Controllers, guards, interceptors and filters of a route are resolved in the controller's module. Modules can re-export imported modules, and circular imports are allowed.
+
+**Configuration (`ConfigModule`)**, like `@nestjs/config`: `ConfigModule::forRoot()` loads `.env` at startup and exposes `ConfigService` to every module (global by default). Providers that need configuration get it by constructor or through a factory with `inject`:
+
+```php
+use MikroApi\Config\{ConfigModule, ConfigService};
+
+#[Module(
+    controllers: [AuthController::class],
+    providers: [
+        ['provide' => JwtService::class, 'useFactory' => [AuthModule::class, 'createJwt'], 'inject' => [ConfigService::class]],
+    ],
+    exports: [JwtService::class],
+    global: true,
+)]
+class AuthModule
+{
+    public static function createJwt(ConfigService $config): JwtService
+    {
+        return new JwtService($config->get('jwt.secret'), ttl: $config->get('jwt.ttl'));
+    }
+}
+
+App::create(
+    ConfigModule::forRoot(
+        envFilePath: __DIR__ . '/..',          // directory with .env (also loads .env.{APP_ENV})
+        load: [                                // namespaced config, read as 'jwt.secret'
+            'jwt' => fn(ConfigService $c) => [
+                'secret' => $c->getOrThrow('JWT_SECRET'),
+                'ttl'    => $c->getInt('JWT_TTL', 3600),
+            ],
+        ],
+        validate: ['JWT_SECRET'],              // fails at startup if missing
+        // isGlobal: true, envFile: '.env'
+    ),
+    AppModule::class,
+)->run();
+```
+
+Keys missing from `.env` fall back to the real process environment, so in production you can inject `JWT_SECRET` as an environment variable without shipping a `.env` file. Importing `ConfigModule::class` without `forRoot()` gives a `ConfigService` that only reads the process environment.
+
+**Dynamic modules** in general are configured at bootstrap (closures are allowed here, unlike in attributes). Register them before the modules that import them:
+
+```php
+use MikroApi\Module\DynamicModule;
+
+#[Module]
+class MailModule
+{
+    public static function forRoot(array $options): DynamicModule
+    {
+        return new DynamicModule(
+            module:    self::class,
+            providers: [['provide' => 'mail.options', 'useValue' => $options], MailService::class],
+            exports:   [MailService::class],
+            global:    true,
+        );
+    }
+}
+
+App::create(MailModule::forRoot(['from' => 'no-reply@app.com']), AppModule::class)->run();
+```
+
+**Lifecycle hooks**: providers (class, `useClass` or object `useValue`) and module classes implementing `MikroApi\Module\OnModuleInit` get `onModuleInit()` after loading, imported modules first. `OnApplicationShutdown::onApplicationShutdown()` runs in reverse order in `App::close()`, which `run()` calls after sending the response (only for providers that were instantiated).
+
+`$app->getModuleContainer(UsersModule::class)` returns a module's container (useful in tests and scripts).
 
 ## Available Validation Rules
 
@@ -797,6 +1123,7 @@ Check the [`examples/`](./examples) directory for complete, runnable working exa
 
 - [`examples/basic/`](./examples/basic) - Minimal routing, the smallest possible app
 - [`examples/auth/`](./examples/auth) - JWT Authentication implementation
+- [`examples/modules/`](./examples/modules) - Modules, dynamic modules, built-in JWT/roles guards, parameter injection, interceptors and exception filters
 - [`examples/swagger/`](./examples/swagger) - Complete Swagger/OpenAPI documentation example
 - [`examples/crud-api/`](./examples/crud-api) - Repository pattern, migrations, relations, soft deletes, pagination & transactions ("mini blog" API)
 - [`examples/middleware/`](./examples/middleware) - Full middleware pipeline: CORS, rate limiting, JSON body validation, custom middleware
