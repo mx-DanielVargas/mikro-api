@@ -254,6 +254,10 @@ class App
                 $generator->setAuthGuards($authGuards);
             }
 
+            // Se leen al generar el spec (perezoso), así que no importa si
+            // useGlobalGuards() se llamó antes o después de enableSwagger().
+            $generator->setGlobalGuards($this->globalGuards);
+
             return $generator->generate(
                 controllers:         $toDocument,
                 excludeControllers:  $excludeControllers,
